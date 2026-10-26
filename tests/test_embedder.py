@@ -32,6 +32,21 @@ def test_constants():
     assert EcapaEmbedder.dim == DIM
 
 
+def test_model_load_failure_names_the_cause(monkeypatch, tmp_path):
+    from speechbrain.inference.speaker import EncoderClassifier
+
+    def offline(*args, **kwargs):
+        raise ConnectionError("Name or service not known")
+
+    monkeypatch.setattr(EncoderClassifier, "from_hparams", offline)
+    with pytest.raises(AppError) as excinfo:
+        EcapaEmbedder(tmp_path)
+    assert str(excinfo.value) == (
+        "埋め込みモデルのダウンロードに失敗しました。ネットワーク接続を確認してください"
+        "（ConnectionError: Name or service not known）"
+    )
+
+
 @pytest.fixture(scope="module")
 def savedir(tmp_path_factory):
     return tmp_path_factory.mktemp("models")

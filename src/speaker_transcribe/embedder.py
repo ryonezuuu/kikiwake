@@ -47,7 +47,10 @@ class EcapaEmbedder:
                 local_strategy=LocalStrategy.COPY_SKIP_CACHE,
             )
         except Exception as e:
-            raise AppError("埋め込みモデルのダウンロードに失敗しました。ネットワーク接続を確認してください") from e
+            raise AppError(
+                "埋め込みモデルのダウンロードに失敗しました。ネットワーク接続を確認してください"
+                f"（{type(e).__name__}: {e}）"
+            ) from e
 
     def embed(self, wave: np.ndarray) -> np.ndarray:
         if len(wave) < _MIN_SAMPLES:
