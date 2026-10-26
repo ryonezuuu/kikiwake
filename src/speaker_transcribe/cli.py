@@ -158,6 +158,8 @@ def _cmd_speakers_rename(args: argparse.Namespace, home: Path, settings: Setting
     db = _load_db(home, settings)
     db.rename(args.old, args.new)
     db.save()
+    if args.json:
+        _print_json({"renamed": {"from": args.old, "to": args.new}})
     return 0
 
 
@@ -165,6 +167,8 @@ def _cmd_speakers_delete(args: argparse.Namespace, home: Path, settings: Setting
     db = _load_db(home, settings)
     db.delete(args.name)
     db.save()
+    if args.json:
+        _print_json({"deleted": args.name})
     return 0
 
 
@@ -243,9 +247,11 @@ def _build_parser() -> argparse.ArgumentParser:
     sp = people.add_parser("rename", help="人の名前を変える")
     sp.add_argument("old", metavar="OLD")
     sp.add_argument("new", metavar="NEW")
+    _add_json(sp)
     sp.set_defaults(handler=_cmd_speakers_rename)
     sp = people.add_parser("delete", help="人とその声紋を削除する")
     sp.add_argument("name", metavar="NAME")
+    _add_json(sp)
     sp.set_defaults(handler=_cmd_speakers_delete)
 
     p = commands.add_parser("viz", help="声の可視化画像（<stem>.voices.png）を作る")

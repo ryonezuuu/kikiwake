@@ -173,6 +173,34 @@ def test_speakers_list_rename_delete(cli_env, capsys):
     assert json.loads(capsys.readouterr().out) == []
 
 
+def test_speakers_rename_json(cli_env, capsys):
+    main(["transcribe", str(cli_env.audio)])
+    main(["label", str(cli_env.session_path), "spk_0=田中"])
+    capsys.readouterr()
+    assert main(["speakers", "rename", "田中", "鈴木", "--json"]) == 0
+    expected = {"renamed": {"from": "田中", "to": "鈴木"}}
+    assert capsys.readouterr().out == json.dumps(expected, ensure_ascii=False, indent=2) + "\n"
+    assert main(["speakers", "list", "--json"]) == 0
+    assert [p["name"] for p in json.loads(capsys.readouterr().out)] == ["鈴木"]
+    assert main(["speakers", "rename", "田中", "佐藤", "--json"]) == 2  # errors are unchanged
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err.startswith("エラー: ")
+
+
+def test_speakers_delete_json(cli_env, capsys):
+    main(["transcribe", str(cli_env.audio)])
+    main(["label", str(cli_env.session_path), "spk_0=田中"])
+    capsys.readouterr()
+    assert main(["speakers", "delete", "田中", "--json"]) == 0
+    expected = {"deleted": "田中"}
+    assert capsys.readouterr().out == json.dumps(expected, ensure_ascii=False, indent=2) + "\n"
+    assert main(["speakers", "list", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == []
+    assert main(["speakers", "delete", "田中", "--json"]) == 2  # errors are unchanged
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err.startswith("エラー: ")
+
+
 def test_speakers_list_human_format(cli_env, capsys):
     main(["transcribe", str(cli_env.audio)])
     main(["label", str(cli_env.session_path), "spk_0=田中", "spk_1=鈴木"])
