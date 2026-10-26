@@ -266,7 +266,8 @@ def run_transcribe(
             # With the cached response the speaker ids are unchanged, so earlier names can be restored.
             _restore_labels(session, db, cached, taken_back, known)
 
-        db.save()
+        # The session first: it records what was added to the DB, so a rerun can take it back.
         save_session(session, session_path)
+        db.save()
         atomic_write_text(markdown_path, render_markdown(session))
     return session, markdown_path, session_path

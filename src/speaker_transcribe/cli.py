@@ -299,3 +299,6 @@ def main(argv: list[str] | None = None) -> int:
     except AppError as e:
         print(f"エラー: {e}", file=sys.stderr)
         return e.exit_code
+    except OSError as e:  # e.g. an output directory that cannot be written
+        print(f"エラー: {e}", file=sys.stderr)
+        return 1

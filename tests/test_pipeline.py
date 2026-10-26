@@ -479,3 +479,27 @@ def test_cached_rerun_says_once_that_api_options_are_not_applied(env, capsys, op
     env.run(force_api=True, **options)
     assert OPTIONS_IGNORED not in capsys.readouterr().err
     assert env.calls == 2
+
+
+def test_session_is_saved_before_the_db(env, monkeypatch):
+    label_first_run(env)
+
+    def full_disk(self):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(SpeakerDB, "save", full_disk)
+    with pytest.raises(OSError, match="disk full"):
+        env.run(audio=env.other_meeting_same_voices)
+    kept = load_session(env.other_meeting_same_voices.with_suffix(".session.json"))
+    assert (kept.speakers["spk_0"].status, kept.speakers["spk_0"].name) == ("auto", "田中")
+    assert not env.other_meeting_same_voices.with_suffix(".md").exists()
+
+
+def test_session_and_db_are_saved_before_the_markdown(env):
+    label_first_run(env)
+    env.other_meeting_same_voices.with_suffix(".md").mkdir()  # cannot be written
+    with pytest.raises(OSError):
+        env.run(audio=env.other_meeting_same_voices)
+    kept = load_session(env.other_meeting_same_voices.with_suffix(".session.json"))
+    assert kept.speakers["spk_0"].status == "auto"
+    assert [s.source for s in env.db.people()["田中"]] == ["label", "auto"]

@@ -525,6 +525,17 @@ def test_missing_audio_exit_2(cli_env, tmp_path, capsys):
     assert "音声ファイルが見つかりません" in capsys.readouterr().err
 
 
+def test_os_errors_are_reported_without_a_traceback(cli_env, tmp_path, capsys):
+    not_a_dir = tmp_path / "file"
+    not_a_dir.write_text("", encoding="utf-8")
+    assert main(["transcribe", str(cli_env.audio), "--output-dir", str(not_a_dir)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    last = captured.err.splitlines()[-1]
+    assert last.startswith("エラー: ") and str(not_a_dir) in last
+    assert "Traceback" not in captured.err
+
+
 def test_broken_config_exit_2(cli_env, capsys):
     cli_env.home.mkdir()
     (cli_env.home / "config.toml").write_text("auto_threshold = 'high'", encoding="utf-8")
