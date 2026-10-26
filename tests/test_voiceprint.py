@@ -56,7 +56,10 @@ def test_all_overlap_speaker_is_insufficient():
 
 def test_under_four_seconds_is_insufficient():
     tr = parse_diarized(raw_diarized([("spk_0", 0, 3.9, 0.9, False)]))
-    assert build_voiceprint(np.zeros(80000, np.float32), tr, "spk_0", FakeEmbedder(), S).centroid is None
+    vp = build_voiceprint(np.zeros(80000, np.float32), tr, "spk_0", FakeEmbedder(), S)
+    assert vp.centroid is None and vp.consistency is None
+    assert [(round(a, 6), round(b, 6)) for a, b in vp.segments] == [(0.1, 3.8)]  # still reported
+    assert vp.total_seconds == pytest.approx(3.7)
 
 
 def test_split_chunks():
@@ -72,11 +75,27 @@ def test_centroid_normalized_and_consistency():
     assert np.linalg.norm(vp.centroid) == pytest.approx(1.0) and vp.consistency == pytest.approx(1.0)
 
 
+def test_centroid_is_normalized_mean_of_chunk_embeddings():
+    # Segment (0.1, 9.9) splits into chunks (0.1, 3.1), (3.1, 6.1), (6.1, 9.9) with means 0.1, 2.0, 0.1.
+    wave = np.full(16000 * 10, 0.1, np.float32)
+    wave[49600:97600] = 2.0
+    tr = parse_diarized(raw_diarized([("spk_0", 0, 10, 0.9, False)]))
+    vp = build_voiceprint(wave, tr, "spk_0", FakeEmbedder(), S)
+
+    embeddings = np.stack([FakeEmbedder().embed(np.full(1, m, np.float32)) for m in (0.1, 2.0, 0.1)])
+    mean = embeddings.mean(axis=0)
+    expected = mean / np.linalg.norm(mean)
+    assert vp.centroid == pytest.approx(expected, abs=1e-6)
+    assert vp.consistency == pytest.approx(float(np.mean(embeddings @ expected)), abs=1e-6)
+    assert 0.0 < vp.consistency < 1.0
+
+
 def test_words_are_ordered_by_start_across_turns():
     raw = raw_diarized([("spk_0", 0, 2, 0.9, False), ("spk_1", 2.0, 2.1, 0.9, False), ("spk_0", 2.1, 4.1, 0.9, False)])
-    raw["turns"].reverse()
+    first, _, last = raw["turns"]
+    raw["turns"] = [last, first]  # two spk_0 turns in reverse order, nobody else between their words
     out = select_segments(parse_diarized(raw), "spk_0", S)
-    assert [(round(a, 6), round(b, 6)) for a, b in out] == [(0.1, 1.9), (2.2, 4.0)]
+    assert [(round(a, 6), round(b, 6)) for a, b in out] == [(0.1, 4.0)]
 
 
 def test_no_segments_is_insufficient_even_with_zero_minimum():
