@@ -12,7 +12,13 @@ import numpy as np
 import pytest
 
 from kikiwake.errors import UsageError
-from kikiwake.speaker_db import SpeakerDB, atomic_write_text, inplace_writes_enabled, locked
+from kikiwake.speaker_db import (
+    SpeakerDB,
+    atomic_write_text,
+    backup_path,
+    inplace_writes_enabled,
+    locked,
+)
 
 DIM = 192
 
@@ -559,3 +565,143 @@ def test_speaker_db_does_not_import_torch():
     code = "import sys, kikiwake.speaker_db; sys.exit('torch' in sys.modules)"
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
     assert subprocess.run([sys.executable, "-c", code], env=env).returncode == 0
+
+
+# --- the backup copy (keep_backup) ----------------------------------------------------------
+
+
+BACKUP = ".db.json.bak"
+FALLBACK_WARNING = "警告: db.json が壊れていたため控えから読み込みました\n"
+
+
+def saved_db(tmp_path, *names):
+    """Save a DB with one sample per name (and its backup); return its path."""
+    db = new_db(tmp_path)
+    for i, name in enumerate(names):
+        db.add_sample(name, unit(i), "s", "label")
+    db.save()
+    return tmp_path / "db.json"
+
+
+def test_keep_backup_writes_the_full_text_beside_the_file_first(tmp_path, monkeypatch):
+    p = tmp_path / "db.json"
+    p.write_text("old", encoding="utf-8")
+
+    def eio(src, dst):
+        raise OSError(errno.EIO, "input/output error")
+
+    monkeypatch.setattr(os, "replace", eio)  # writing the file itself fails ...
+    with pytest.raises(OSError):
+        atomic_write_text(p, "新しい", keep_backup=True)
+    assert p.read_text(encoding="utf-8") == "old"
+    assert (tmp_path / BACKUP).read_text(encoding="utf-8") == "新しい"  # ... after the backup was written
+    monkeypatch.undo()
+    atomic_write_text(p, "次", keep_backup=True)
+    assert sorted(q.name for q in tmp_path.iterdir()) == [BACKUP, "db.json"]
+    assert p.read_text(encoding="utf-8") == (tmp_path / BACKUP).read_text(encoding="utf-8") == "次"
+
+
+def test_no_backup_unless_asked(tmp_path):
+    atomic_write_text(tmp_path / "index.md", "x")
+    assert [q.name for q in tmp_path.iterdir()] == ["index.md"]
+
+
+def test_inplace_mode_with_backup_creates_no_temp_file_and_deletes_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("KIKIWAKE_INPLACE_WRITES", "1")
+    forbid_temp_files(monkeypatch)
+    monkeypatch.setattr(os, "replace", deny("replace must not be used"))
+    monkeypatch.setattr(os, "unlink", deny("deletion is forbidden"))
+    monkeypatch.setattr(os, "remove", deny("deletion is forbidden"))
+    monkeypatch.setattr(Path, "unlink", deny("deletion is forbidden"))
+    p = tmp_path / "db.json"
+    for text in ("一", "二"):
+        atomic_write_text(p, text, keep_backup=True)
+    assert sorted(q.name for q in tmp_path.iterdir()) == [BACKUP, "db.json"]
+    assert p.read_text(encoding="utf-8") == (tmp_path / BACKUP).read_text(encoding="utf-8") == "二"
+
+
+def test_files_written_in_place_are_new_files_for_the_owner_only(tmp_path):
+    atomic_write_text(tmp_path / "db.json", "x", keep_backup=True)
+    for name in ("db.json", BACKUP):
+        assert (tmp_path / name).stat().st_mode & 0o777 == 0o600, name
+
+
+def test_backup_name_is_hidden_and_not_a_session_file():
+    assert backup_path(Path("/r/a b.session.json")) == Path("/r/.a b.session.json.bak")
+    assert not backup_path(Path("x.session.json")).match("*.session.json")
+
+
+def test_save_keeps_a_backup(tmp_path):
+    path = saved_db(tmp_path, "田中")
+    assert (tmp_path / BACKUP).read_text(encoding="utf-8") == path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "torn",
+    [b"", b'{"version": 1, "model_id": "m", "di', "田中".encode()[:-1], b'{"version": 1}', b"\0\0\0"],
+    ids=["empty", "cut", "cut-mid-character", "wrong-shape", "zeros"],
+)
+def test_torn_db_is_read_from_the_backup_and_repaired_by_the_next_save(tmp_path, capsys, torn):
+    path = saved_db(tmp_path, "田中")
+    path.write_bytes(torn)
+    db = new_db(tmp_path)
+    assert list(db.people()) == ["田中"]
+    assert capsys.readouterr().err == FALLBACK_WARNING
+    db.add_sample("佐藤", unit(1), "s2", "label")
+    db.save()
+    assert list(new_db(tmp_path).people()) == ["田中", "佐藤"]
+    assert capsys.readouterr().err == ""  # repaired
+
+
+def test_torn_backup_with_a_good_db_is_ignored(tmp_path, capsys):
+    saved_db(tmp_path, "田中")
+    (tmp_path / BACKUP).write_bytes(b'{"vers')
+    assert list(new_db(tmp_path).people()) == ["田中"]
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("backup", [b'{"vers', None], ids=["torn", "missing"])
+def test_torn_db_without_a_good_backup_raises_the_original_error(tmp_path, capsys, backup):
+    path = saved_db(tmp_path, "田中")
+    path.write_text("{ not json", encoding="utf-8")
+    if backup is None:
+        (tmp_path / BACKUP).rename(tmp_path / "kept-aside")
+    else:
+        (tmp_path / BACKUP).write_bytes(backup)
+    with pytest.raises(UsageError, match="声紋 DB の形式が不正です") as e:
+        new_db(tmp_path)
+    assert str(path) in str(e.value)
+    assert capsys.readouterr().err == ""
+    assert path.read_text(encoding="utf-8") == "{ not json"  # nothing is written or deleted
+
+
+def test_missing_db_does_not_read_the_backup(tmp_path):
+    path = saved_db(tmp_path, "田中")
+    path.rename(tmp_path / "moved.json")
+    assert new_db(tmp_path).people() == {}
+
+
+@pytest.mark.parametrize(
+    ("main", "message"),
+    [
+        ({"version": 2, "model_id": "m", "dim": DIM, "people": {}}, "未対応の声紋 DB バージョン"),
+        ({"version": 1, "model_id": "other", "dim": DIM, "people": {}}, "別の埋め込みモデル"),
+        ({"version": 1, "model_id": "m", "dim": 64, "people": {}}, "別の埋め込みモデル"),
+    ],
+    ids=["version", "model", "dim"],
+)
+def test_db_of_another_version_or_model_does_not_fall_back_to_the_backup(tmp_path, capsys, main, message):
+    path = saved_db(tmp_path, "田中")  # the backup is a good DB for this model
+    path.write_text(json.dumps(main), encoding="utf-8")
+    with pytest.raises(UsageError, match=message):
+        new_db(tmp_path)
+    assert capsys.readouterr().err == ""
+
+
+def test_backup_of_another_model_is_not_used(tmp_path):
+    path = saved_db(tmp_path, "田中")
+    other = {"version": 1, "model_id": "other", "dim": DIM, "people": {}}
+    (tmp_path / BACKUP).write_text(json.dumps(other), encoding="utf-8")
+    path.write_text("{", encoding="utf-8")  # torn, and the backup is of another model
+    with pytest.raises(UsageError, match="声紋 DB の形式が不正です"):
+        new_db(tmp_path)

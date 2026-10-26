@@ -17,7 +17,7 @@ from kikiwake.errors import AppError, UsageError
 from kikiwake.labeling import apply_labels
 from kikiwake.pipeline import TranscribeOptions, recorded_at_for, run_transcribe
 from kikiwake.session import load_session, save_session
-from kikiwake.speaker_db import SpeakerDB, locked
+from kikiwake.speaker_db import SpeakerDB, backup_path, locked
 
 DURATION = 30.0
 # (speaker, first word start, end, tone frequency): clean speech, 0.5 s per word, no gaps or overlap.
@@ -309,13 +309,26 @@ def test_changed_audio_at_same_path_is_not_served_from_cache(env):
 
 def test_corrupt_previous_session_is_ignored_with_a_warning(env, capsys):
     _, _, ss = env.run()
-    ss.write_text("{ not json", encoding="utf-8")
+    for broken in (ss, backup_path(ss)):  # its backup too
+        broken.write_text("{ not json", encoding="utf-8")
     capsys.readouterr()
     s2, _, _ = env.run()
     captured = capsys.readouterr()
     assert env.calls == 2 and captured.out == ""
     assert captured.err.count("警告") == 1 and str(ss) in captured.err
     assert load_session(ss).audio_sha256 == s2.audio_sha256
+
+
+def test_torn_previous_session_is_read_from_its_backup_and_not_bought_again(env, capsys):
+    label_first_run(env)
+    ss = env.audio.with_suffix(".session.json")
+    ss.write_bytes(ss.read_bytes()[:100])  # cut short, as by a kill midway through a save
+    capsys.readouterr()
+    s2, _, _ = env.run()
+    assert env.calls == 1
+    assert (s2.speakers["spk_0"].status, s2.speakers["spk_0"].name) == ("confirmed", "田中")
+    assert "警告: meeting.session.json が壊れていたため控えから読み込みました" in capsys.readouterr().err
+    assert load_session(ss) == s2  # repaired by the save
 
 
 def test_too_long_audio_rejected_before_upload(env, monkeypatch):

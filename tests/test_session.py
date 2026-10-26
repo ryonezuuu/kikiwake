@@ -7,6 +7,13 @@ from conftest import make_session, make_state
 
 from kikiwake.errors import UsageError
 from kikiwake.session import load_session, save_session, session_paths
+from kikiwake.speaker_db import backup_path
+
+
+def hand_edit(path, data) -> None:
+    """Overwrite a saved session and its backup with ``data``, as if edited by hand."""
+    for target in (path, backup_path(path)):
+        target.write_text(json.dumps(data), encoding="utf-8")
 
 
 def test_session_paths_keep_spaces_and_dots(tmp_path):
@@ -82,7 +89,7 @@ def test_load_rejects_unknown_status(tmp_path):
     save_session(make_session(), path)
     data = json.loads(path.read_text(encoding="utf-8"))
     data["speakers"]["spk_0"]["status"] = "bogus"
-    path.write_text(json.dumps(data), encoding="utf-8")
+    hand_edit(path, data)
     with pytest.raises(UsageError, match="x.session.json"):
         load_session(path)
 
@@ -127,6 +134,65 @@ def test_load_rejects_non_string_recorded_at(tmp_path, value):
     save_session(make_session(), path)
     data = json.loads(path.read_text(encoding="utf-8"))
     data["recorded_at"] = value
-    path.write_text(json.dumps(data), encoding="utf-8")
+    hand_edit(path, data)
     with pytest.raises(UsageError, match="x.session.json"):
         load_session(path)
+
+
+# --- the backup copy -----------------------------------------------------------------------
+
+SESSION_BACKUP = ".x.session.json.bak"
+SESSION_FALLBACK = "警告: x.session.json が壊れていたため控えから読み込みました\n"
+
+
+@pytest.fixture
+def saved(tmp_path, monkeypatch):
+    """A saved session (``x.session.json``, with its backup) in the default write mode."""
+    monkeypatch.delenv("KIKIWAKE_INPLACE_WRITES", raising=False)
+    path = tmp_path / "x.session.json"
+    save_session(make_session(spk_0=dict(status="confirmed", name="田中")), path)
+    return path
+
+
+def test_save_session_keeps_a_backup(saved):
+    backup = saved.with_name(SESSION_BACKUP)
+    assert backup.read_text(encoding="utf-8") == saved.read_text(encoding="utf-8")
+    assert sorted(p.name for p in saved.parent.iterdir()) == [SESSION_BACKUP, "x.session.json"]
+
+
+@pytest.mark.parametrize("torn", [b"", b'{"version": 1, "audio_pa', "田中".encode()[:-1], b"[]"])
+def test_torn_session_is_read_from_the_backup(saved, capsys, torn):
+    saved.write_bytes(torn)
+    loaded = load_session(saved)
+    assert loaded.speakers["spk_0"].name == "田中"
+    assert capsys.readouterr().err == SESSION_FALLBACK
+    save_session(loaded, saved)  # the next save repairs it
+    assert load_session(saved) == loaded and capsys.readouterr().err == ""
+
+
+def test_torn_backup_with_a_good_session_is_ignored(saved, capsys):
+    saved.with_name(SESSION_BACKUP).write_bytes(b"{")
+    assert load_session(saved).speakers["spk_0"].name == "田中"
+    assert capsys.readouterr().err == ""
+
+
+def test_torn_session_and_backup_raise_the_original_error(saved, capsys):
+    saved.write_text("not json", encoding="utf-8")
+    saved.with_name(SESSION_BACKUP).write_text("[]", encoding="utf-8")
+    with pytest.raises(UsageError, match="x.session.json: セッションの形式が不正です: JSONDecodeError"):
+        load_session(saved)
+    assert capsys.readouterr().err == ""
+
+
+def test_missing_session_does_not_read_the_backup(saved):
+    saved.rename(saved.with_name("moved"))
+    with pytest.raises(UsageError, match="セッションを読み込めません"):
+        load_session(saved)
+
+
+def test_session_of_another_version_does_not_fall_back(saved):
+    data = json.loads(saved.read_text(encoding="utf-8"))
+    data["version"] = 2
+    saved.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(UsageError, match="未対応のセッションバージョン"):
+        load_session(saved)

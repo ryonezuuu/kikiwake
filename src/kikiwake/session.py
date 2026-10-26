@@ -7,7 +7,7 @@ from typing import Any, Literal, cast, get_args
 
 from kikiwake.errors import UsageError
 from kikiwake.models import DiarizedTranscription, parse_diarized
-from kikiwake.speaker_db import atomic_write_text
+from kikiwake.speaker_db import BrokenFileError, atomic_write_text, parse_with_backup
 
 SESSION_VERSION = 1
 
@@ -85,7 +85,8 @@ def save_session(session: Session, path: Path) -> None:
         "speakers": {sid: _speaker_to_json(st) for sid, st in session.speakers.items()},
         "warnings": session.warnings,
     }
-    atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
+    # With a backup: this file holds the paid Avalon response and the confirmed names.
+    atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2), keep_backup=True)
 
 
 def _optional(raw: dict[str, Any], key: str, kind: type) -> Any:
@@ -114,12 +115,17 @@ def _speaker_from_json(sid: str, raw: dict[str, Any]) -> SpeakerState:
 
 
 def load_session(path: Path) -> Session:
+    """The session saved at ``path``; a torn file is read from its backup (see ``parse_with_backup``)."""
     try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as e:
+        content = path.read_bytes()
+    except OSError as e:
         raise UsageError(f"{path}: セッションを読み込めません: {e}") from e
+    return parse_with_backup(path, content, lambda data: _session_from_json(path, data))
+
+
+def _session_from_json(path: Path, content: bytes) -> Session:
     try:
-        data = json.loads(text)
+        data = json.loads(content.decode("utf-8"))
         version = data["version"]
         if version != SESSION_VERSION:
             raise UsageError(f"{path}: 未対応のセッションバージョンです: {version!r}")
@@ -145,5 +151,5 @@ def load_session(path: Path) -> Session:
     except UsageError:
         raise
     except (ValueError, KeyError, TypeError, AttributeError) as e:
-        # ValueError covers invalid JSON; the rest cover a wrong shape.
-        raise UsageError(f"{path}: セッションの形式が不正です: {type(e).__name__}: {e}") from e
+        # ValueError covers invalid UTF-8 and JSON; the rest cover a wrong shape.
+        raise BrokenFileError(f"{path}: セッションの形式が不正です: {type(e).__name__}: {e}") from e

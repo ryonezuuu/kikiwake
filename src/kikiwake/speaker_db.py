@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, cast, get_args
+from typing import Any, Literal, TypeVar, cast, get_args
 
 import numpy as np
 
@@ -52,8 +52,12 @@ def inplace_writes_enabled(env: Mapping[str, str] = os.environ) -> bool:
 
 
 def _write_in_place(path: Path, text: str) -> None:
-    """Write ``text`` straight into ``path`` (no temp file, no replace); it may be torn if we are killed midway."""
-    with open(path, "w", encoding="utf-8") as fh:
+    """Write ``text`` straight into ``path`` (no temp file, no replace); it may be torn if we are killed midway.
+
+    A file it creates is readable by its owner only, like the temp files (it may hold voiceprints).
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with open(fd, "w", encoding="utf-8") as fh:
         fh.write(text)
         fh.flush()
         os.fsync(fh.fileno())
@@ -67,13 +71,24 @@ def _unlink_quietly(path: Path) -> None:
         pass
 
 
-def atomic_write_text(path: Path, text: str) -> None:
+def backup_path(path: Path) -> Path:
+    """Where the backup copy of ``path`` is kept: ``.<name>.bak`` beside it (hidden, never ``*.session.json``)."""
+    return path.with_name(f".{path.name}.bak")
+
+
+def atomic_write_text(path: Path, text: str, *, keep_backup: bool = False) -> None:
     """Write ``text`` to ``path`` via a temp file in the same directory and ``os.replace``.
 
     Where replacing files is forbidden, write in place instead: always when ``KIKIWAKE_INPLACE_WRITES``
     is on (see :func:`inplace_writes_enabled`), otherwise once ``os.replace`` raises ``PermissionError``.
+
+    With ``keep_backup``, the whole ``text`` is first written (in place) to :func:`backup_path`, so a
+    write of ``path`` cut short can be recovered by :func:`parse_with_backup`. Nothing is ever deleted
+    but our own temp file.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    if keep_backup:
+        _write_in_place(backup_path(path), text)
     if inplace_writes_enabled():
         _write_in_place(path, text)
         return
@@ -97,6 +112,33 @@ def atomic_write_text(path: Path, text: str) -> None:
             _write_in_place(path, text)
         finally:
             _unlink_quietly(tmp_path)
+
+
+class BrokenFileError(UsageError):
+    """A file that is there but does not parse, or has the wrong shape (e.g. torn by a write cut short)."""
+
+
+T = TypeVar("T")
+
+
+def parse_with_backup(path: Path, data: bytes, parse: Callable[[bytes], T]) -> T:
+    """``parse(data)``, ``data`` being the content of ``path``; if it is broken, parse the backup instead.
+
+    Only a :class:`BrokenFileError` turns to the backup kept by ``atomic_write_text(keep_backup=True)``,
+    which then is used with a warning on stderr (the next save writes ``path`` whole again). A file of
+    another version or model is not broken. If the backup is missing or bad too, the original error
+    is raised.
+    """
+    try:
+        return parse(data)
+    except BrokenFileError as e:
+        original = e
+    try:
+        value = parse(backup_path(path).read_bytes())
+    except (OSError, UsageError):
+        raise original from original.__cause__
+    print(f"警告: {path.name} が壊れていたため控えから読み込みました", file=sys.stderr)
+    return value
 
 
 @contextmanager
@@ -195,18 +237,18 @@ class SpeakerDB:
         max_samples: int,
         now: Callable[[], str] = _local_now,
     ) -> "SpeakerDB":
-        people: dict[str, _Person] = {}
+        """The DB saved at ``path`` (empty if there is none); a torn file is read from its backup."""
         try:
-            text = path.read_text(encoding="utf-8")
+            data = path.read_bytes()
         except FileNotFoundError:
-            text = None
-        except (OSError, UnicodeDecodeError) as e:
+            return cls(path, model_id, dim, max_samples, now, {})
+        except OSError as e:
             raise UsageError(f"{path}: 声紋 DB を読み込めません: {e}") from e
 
-        if text is not None:
+        def parse(content: bytes) -> dict[str, _Person]:
             try:
-                data = json.loads(text)
-                version, file_model, file_dim = data["version"], data["model_id"], data["dim"]
+                raw = json.loads(content.decode("utf-8"))
+                version, file_model, file_dim = raw["version"], raw["model_id"], raw["dim"]
                 if version != DB_VERSION:
                     raise UsageError(f"{path}: 未対応の声紋 DB バージョンです: {version!r}")
                 if (file_model, file_dim) != (model_id, dim):
@@ -215,12 +257,16 @@ class SpeakerDB:
                         f"（DB: {file_model}・{file_dim} 次元 / 現在: {model_id}・{dim} 次元）。"
                         "古い声紋とは比較できないため、db.json を退避して作り直してください"
                     )
-                people = _people_from_json(data["people"])
+                return _people_from_json(raw["people"])
             except UsageError:
                 raise
             except (ValueError, KeyError, TypeError, AttributeError) as e:
-                # ValueError covers invalid JSON; the rest cover a wrong shape.
-                raise UsageError(f"{path}: 声紋 DB の形式が不正です: {type(e).__name__}: {e}") from e
+                # ValueError covers invalid UTF-8 and JSON; the rest cover a wrong shape.
+                raise BrokenFileError(
+                    f"{path}: 声紋 DB の形式が不正です: {type(e).__name__}: {e}"
+                ) from e
+
+        people = parse_with_backup(path, data, parse)
         return cls(path, model_id, dim, max_samples, now, people)
 
     def save(self) -> None:
@@ -236,7 +282,7 @@ class SpeakerDB:
                 for name, person in self._people.items()
             },
         }
-        atomic_write_text(self._path, json.dumps(data, ensure_ascii=False, indent=2))
+        atomic_write_text(self._path, json.dumps(data, ensure_ascii=False, indent=2), keep_backup=True)
 
     def people(self) -> dict[str, list[Sample]]:
         return {name: list(person.samples) for name, person in self._people.items()}
