@@ -553,6 +553,46 @@ def test_label_redraws_the_picture_from_the_found_recording(cli_env, tmp_path, c
     assert png.read_bytes().startswith(b"\x89PNG")
 
 
+def split_db_warning(root: Path, home: Path) -> str:
+    return (
+        f"警告: 記録フォルダの声紋 DB（{root}/.kikiwake）ではなく {home} を使っています。"
+        "KIKIWAKE_HOME を確認してください\n"
+    )
+
+
+def test_records_folder_with_its_own_db_unused_is_warned_about(cli_env, tmp_path, capsys):
+    root = tmp_path / "kikiwake"
+    (root / ".kikiwake").mkdir(parents=True)  # the shared DB, but KIKIWAKE_HOME points elsewhere
+    meeting_dir = root / "records" / "meeting"
+    assert main(["transcribe", str(cli_env.audio), "--output-dir", str(meeting_dir), "--json"]) == 0
+    captured = capsys.readouterr()
+    assert captured.err.startswith(split_db_warning(root, cli_env.home))
+    assert captured.err.count("警告") == 1
+    json.loads(captured.out)  # the work is done as before
+    assert (cli_env.home / "db.json").exists() and not (root / ".kikiwake" / "db.json").exists()
+
+    assert main(["label", str(meeting_dir / "meeting.session.json"), "spk_0=田中"]) == 0
+    assert capsys.readouterr().err == split_db_warning(root, cli_env.home)
+
+
+@pytest.mark.parametrize("how", ["same", "symlink", "no-records-db", "not-a-meeting-folder"])
+def test_no_split_db_warning_otherwise(cli_env, tmp_path, monkeypatch, capsys, how):
+    root = tmp_path / "kikiwake"
+    meeting_dir = root / "records" / "meeting"
+    if how != "no-records-db":
+        (root / ".kikiwake").mkdir(parents=True)
+    if how == "same":
+        monkeypatch.setenv("KIKIWAKE_HOME", str(root / ".kikiwake"))
+    elif how == "symlink":
+        (tmp_path / "link").symlink_to(root / ".kikiwake")
+        monkeypatch.setenv("KIKIWAKE_HOME", str(tmp_path / "link"))
+    elif how == "not-a-meeting-folder":
+        meeting_dir = root / "elsewhere" / "meeting"
+    assert main(["transcribe", str(cli_env.audio), "--output-dir", str(meeting_dir)]) == 0
+    assert main(["label", str(meeting_dir / "meeting.session.json"), "spk_0=田中"]) == 0
+    assert "声紋 DB（" not in capsys.readouterr().err
+
+
 def test_label_regenerates_png_only_when_it_exists(cli_env, monkeypatch, capsys):
     main(["transcribe", str(cli_env.audio)])
     capsys.readouterr()

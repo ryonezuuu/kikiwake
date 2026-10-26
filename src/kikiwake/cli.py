@@ -94,6 +94,33 @@ def _records_root(folder: Path) -> Path | None:
     return folder.parent.parent if folder.parent.name == "records" else None
 
 
+def _same_place(a: Path, b: Path) -> bool:
+    if a.resolve() == b.resolve():
+        return True
+    try:
+        return os.path.samefile(a, b)  # e.g. the same folder spelt in another letter case
+    except OSError:
+        return False
+
+
+def _warn_if_split_db(meeting_folder: Path, home: Path) -> None:
+    """Warn if ``meeting_folder`` is in a records folder whose own voiceprint DB is not ``home``.
+
+    Names learnt now would then go to another DB than the one the records folder shares between
+    Cowork and the Mac. Only a warning: the command runs as before.
+    """
+    root = _records_root(meeting_folder)
+    if root is None:
+        return
+    records_home = root / ".kikiwake"
+    if records_home.exists() and not _same_place(records_home, home):
+        print(
+            f"警告: 記録フォルダの声紋 DB（{records_home}）ではなく {home} を使っています。"
+            "KIKIWAKE_HOME を確認してください",
+            file=sys.stderr,
+        )
+
+
 def _find_audio(session: Session, session_path: Path) -> Path | None:
     """The recording of ``session``, or ``None`` if it cannot be found.
 
@@ -146,6 +173,7 @@ def _refresh_viz(
 
 
 def _cmd_transcribe(args: argparse.Namespace, home: Path, settings: Settings) -> int:
+    _warn_if_split_db(session_paths(args.audio, args.output_dir)[1].parent, home)
     # Before the (slow) model load and the API call, so these mistakes fail fast.
     check_audio(args.audio)
     _load_db(home, settings)  # a DB made with another model
@@ -184,6 +212,7 @@ def _parse_pair(arg: str) -> tuple[str, str]:
 
 
 def _cmd_label(args: argparse.Namespace, home: Path, settings: Settings) -> int:
+    _warn_if_split_db(args.session.parent, home)
     pairs = [_parse_pair(arg) for arg in args.pairs]
     with _open_db(home, settings) as db:
         session = load_session(args.session)  # under the lock too: another `label` may be saving it
