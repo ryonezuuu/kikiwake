@@ -27,7 +27,7 @@ markers = [
     "model: downloads the real embedding model",
     "e2e: calls the real Avalon API",
 ]
-pythonpath = ["src"]
+pythonpath = ["src", "tests"]
 
 [dependency-groups]
 dev = [
