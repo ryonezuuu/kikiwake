@@ -1,4 +1,4 @@
-"""The ``kikiwake`` command: ``transcribe``, ``label``, ``speakers`` and ``viz``."""
+"""The ``kikiwake`` command: ``transcribe``, ``label``, ``speakers``, ``viz`` and ``index``."""
 
 import argparse
 import json
@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+from kikiwake.archive import write_index
 from kikiwake.audio import load_wav, require_ffmpeg, to_wav16k
 from kikiwake.avalon import API_KEY_FILENAME, AvalonClient, get_api_key
 from kikiwake.config import Settings, data_home, load_settings
@@ -207,6 +208,17 @@ def _cmd_viz(args: argparse.Namespace, home: Path, settings: Settings) -> int:
     return 0
 
 
+def _cmd_index(args: argparse.Namespace, home: Path, settings: Settings) -> int:
+    if not args.root.is_dir():
+        raise UsageError(f"記録フォルダが見つかりません: {args.root}")
+    index_path, meetings, skipped = write_index(args.root)
+    if args.json:
+        _print_json({"index_path": str(index_path), "meetings": meetings, "skipped": skipped})
+    else:
+        print(index_path)
+    return 0
+
+
 def _path(text: str) -> Path:
     """An absolute path, so what is stored in a session works from any directory."""
     return Path(text).expanduser().resolve()
@@ -281,6 +293,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("session", type=_path, metavar="SESSION", help="<stem>.session.json")
     _add_json(p)
     p.set_defaults(handler=_cmd_viz)
+
+    p = commands.add_parser("index", help="会議の一覧（ROOT/index.md）を作る")
+    p.add_argument(
+        "root", type=_path, metavar="ROOT", help="記録フォルダ（records/<名前>/ を含む）"
+    )
+    _add_json(p)
+    p.set_defaults(handler=_cmd_index)
 
     return parser
 

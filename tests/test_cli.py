@@ -545,6 +545,57 @@ def test_commands_other_than_transcribe_do_not_load_the_model(cli_env, monkeypat
     assert main(["viz", str(cli_env.session_path)]) == 0
 
 
+def test_index_command_json(cli_env, tmp_path, monkeypatch, capsys):
+    root = tmp_path / "kikiwake"
+    meeting_dir = root / "records" / "meeting"
+    assert main(["transcribe", str(cli_env.audio), "--output-dir", str(meeting_dir)]) == 0
+    session_path = meeting_dir / "meeting.session.json"
+    assert main(["label", str(session_path), "spk_0=田中"]) == 0
+    no_model(monkeypatch)
+    capsys.readouterr()
+
+    assert main(["index", str(root), "--json"]) == 0
+
+    captured = capsys.readouterr()
+    index_path = (root / "index.md").resolve()
+    assert json.loads(captured.out) == {"index_path": str(index_path), "meetings": 1, "skipped": []}
+    assert captured.err == ""
+    text = index_path.read_text(encoding="utf-8")
+    assert re.fullmatch(
+        r"# 会議の記録\n\n\| 日時 \| 長さ \| 参加者 \| 要点 \| 文字起こし \|\n\|---\|---\|---\|---\|---\|\n"
+        r"\| \d{4}-\d\d-\d\d \d\d:\d\d \| 0 分 \| 田中・ほか1名 \| （要点なし） \| "
+        r"\[開く\]\(<records/meeting/meeting\.md>\) \|\n",
+        text,
+    )
+
+    (root / "records" / "broken").mkdir()
+    (root / "records" / "broken" / "x.session.json").write_text("{", encoding="utf-8")
+    assert main(["index", str(root), "--json"]) == 0  # a broken record neither stops it nor breaks the JSON
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["skipped"] == ["records/broken/x.session.json"]
+    assert "警告: 読めない記録を飛ばしました: records/broken/x.session.json" in captured.err
+
+
+def test_index_command_prints_the_path(cli_env, tmp_path, capsys):
+    root = tmp_path / "kikiwake"
+    root.mkdir()
+    assert main(["index", str(root)]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == f"{(root / 'index.md').resolve()}\n"
+    assert "（まだ記録がありません）" in (root / "index.md").read_text(encoding="utf-8")
+
+
+def test_index_missing_root_exit_2(cli_env, tmp_path, capsys):
+    not_a_directory = tmp_path / "file"
+    not_a_directory.write_text("", encoding="utf-8")
+    for bad in (tmp_path / "nope", not_a_directory):
+        assert main(["index", str(bad), "--json"]) == 2
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err.startswith("エラー: ") and str(bad) in captured.err
+    assert not (tmp_path / "nope").exists() and not_a_directory.read_text() == ""
+
+
 def test_missing_audio_exit_2(cli_env, tmp_path, capsys):
     assert main(["transcribe", str(tmp_path / "nope.wav")]) == 2
     assert "音声ファイルが見つかりません" in capsys.readouterr().err
