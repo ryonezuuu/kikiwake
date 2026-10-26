@@ -11,7 +11,8 @@ description: 会議・打ち合わせの音声ファイルを、話者名付き�
 ## 前提
 
 - `speaker-transcribe` が PATH 上にあること。無ければリポジトリのルートで `uv tool install .` を実行する。
-  コードを変更したあとは `uv tool install --reinstall .` で入れ直す。
+  コードを変更したあとは `uv tool install --reinstall .` で入れ直す。リポジトリのルートは、このスキルの
+  シンボリックリンク先の親ディレクトリ（`dirname "$(readlink ~/.claude/skills/speaker-transcribe)"`）。
 - `ffmpeg` / `ffprobe` が必要（無ければ `brew install ffmpeg`）。
 - Avalon の API キーは、ユーザーのシェル設定（`~/.zshrc` など）で `export AQUAVOICE_API=...` として設定された環境変数から読む
   （`AQUAVOICE_API` → `AQUAVOICE_API_KEY` → `AQUA_API_KEY` の順）。`export` を付けないと子プロセスに渡らない。
@@ -73,7 +74,16 @@ speaker-transcribe transcribe "<音声ファイルのパス>" --json
 | `unknown` | 該当する人がいない（`話者N`） | 名前を尋ねる |
 | `insufficient` | 声紋に使える発話が少なすぎる（`話者N`） | 名前は付けられるが声紋 DB には登録されない。そう伝える |
 
-`warnings` が空でなければ、ユーザーに伝える（9 人以上いた可能性、声の一貫性の警告など）。
+`warnings` が空でなければ、ユーザーに伝える（9 人以上いた可能性、声の一貫性の警告、
+前回の名前付けを引き継げなかった人など）。ただし「名前が未確定の話者が N 人います。」は、
+その話者について手順 3 でユーザーに尋ねたあとは繰り返さなくてよい。
+
+標準エラーに次の行が出ることがある。
+
+- `警告: ...`（`transcribe` / `label` とも）: 処理は成功している。内容をユーザーに伝える。
+  `警告: 可視化をスキップしました: ...` のときは画像だけ作れなかった（`viz_path` は `null`）。
+- `別の speaker-transcribe が DB を使用中のため待機しています…`: 別の実行が声紋 DB を使い終わるのを待っているだけ。
+  そのまま待つ（中断しない）。
 
 ### 3. 名前を尋ねて反映する
 
@@ -86,6 +96,7 @@ speaker-transcribe transcribe "<音声ファイルのパス>" --json
 
 ```bash
 speaker-transcribe label "<session_path>" spk_2=田中 spk_3=佐藤 --json
+speaker-transcribe label "<session_path>" "spk_4=山田 太郎" --json   # 空白を含む名前は KEY=NAME ごと引用符で囲む
 ```
 
 - `candidate` が合っていると言われたら、`？` を除いた名前で同じように `label` する（`spk_2=田中`）。違うと言われたら別の名前を尋ねる。
@@ -93,6 +104,7 @@ speaker-transcribe label "<session_path>" spk_2=田中 spk_3=佐藤 --json
 - 同じ人が 2 つの話者 ID に分かれていると分かったら、両方に同じ名前を付ける（自動的に統合される）。
 - 名前は「さん」などを付けず、ユーザーが言った表記で統一する。迷ったら先に `speaker-transcribe speakers list --json` で登録済みの名前を確認する。
   名前は `？` / `?` で終われない。
+- `label` は標準エラーに `警告: ...` を出すことがある（声紋不足で DB に登録しなかった、など）。そのままユーザーに伝える。
 - `label` は `<stem>.md` を作り直す。`<stem>.voices.png` が既にあれば、それも作り直す。
   標準出力の JSON は `transcribe` と同じ形式なので、残りの未確定の話者を確認できる。
 - 名前が声紋 DB に無い人は、このときに新しく登録される。
@@ -107,7 +119,7 @@ speaker-transcribe label "<session_path>" spk_2=田中 spk_3=佐藤 --json
 
 ```bash
 speaker-transcribe speakers list [--json]          # 登録済みの人、サンプル数、最終更新日時
-speaker-transcribe speakers rename "旧名" "新名"
+speaker-transcribe speakers rename "旧名" "新名"          # 新名は label の名前と同じ規則（空・末尾の ？ / ? は不可）
 speaker-transcribe speakers delete "名前"           # その人の声紋をすべて削除
 ```
 
