@@ -45,26 +45,76 @@
 
 ## インストール
 
+以下は macOS（zsh）の例です。
+
+### 1. kikiwake を入れる
+
 ```bash
 git clone https://github.com/ryonezuuu/kikiwake.git
 cd kikiwake
 uv tool install .
 ```
 
-コードを更新したら `uv tool install --reinstall .` で入れ直します。
+`kikiwake --help` で `transcribe` / `label` / `speakers` / `viz` / `index` が並べば入っています。
+初回の実行時に声紋モデル（約 90 MB）をダウンロードします。
 
-API キーはシェルの設定（`~/.zshrc` など）に書きます。**`export` が必要です**（無いと `kikiwake` に渡りません）。
+### 2. データの置き場所（`KIKIWAKE_HOME`）を決める
+
+声紋 DB・声紋モデル・API キーのファイルは `KIKIWAKE_HOME` に置きます（設定しなければ `~/.local/share/kikiwake/`）。
+記録フォルダ `~/Documents/kikiwake` の中の `.kikiwake` にしておくと、[Cowork](#cowork-で使う) と Mac で同じ声紋 DB を使えます。
 
 ```bash
-echo 'export AQUAVOICE_API="ここにキー"' >> ~/.zshrc
+mkdir -p ~/Documents/kikiwake/.kikiwake
+echo 'export KIKIWAKE_HOME="$HOME/Documents/kikiwake/.kikiwake"' >> ~/.zshrc
 source ~/.zshrc
+echo "$KIKIWAKE_HOME"    # …/Documents/kikiwake/.kikiwake と出れば OK
 ```
 
-`AQUAVOICE_API` → `AQUAVOICE_API_KEY` → `AQUA_API_KEY` の順に読みます。どれも無ければ、
-`$KIKIWAKE_HOME/aquavoice_api_key`（1 行目にキーだけを書いたファイル）を読みます（Cowork ではこちらを使います）。
-キーはログや出力に書き出しません。
+設定する前から開いていたターミナルや Claude Code には `KIKIWAKE_HOME` が渡りません。開き直してください。
 
-初回の実行時に声紋モデル（約 90 MB）をダウンロードします。
+**すでに kikiwake を使っていた場合**（`~/.local/share/kikiwake/db.json` がある場合）は、声紋 DB と声紋モデルを新しい場所にコピーします。
+コピーしないと新しい声紋 DB は空から始まり、これまでに名前を教えた人にも名前が付かなくなります。
+`kikiwake` を動かしていないときに実行してください。
+
+```bash
+cp -np ~/.local/share/kikiwake/db.json ~/Documents/kikiwake/.kikiwake/
+[ -d ~/Documents/kikiwake/.kikiwake/models ] || cp -Rp ~/.local/share/kikiwake/models ~/Documents/kikiwake/.kikiwake/
+kikiwake speakers list    # これまでに名前を教えた人が並べば OK
+```
+
+- `-n` を付けているので、新しい場所にすでに `db.json` があれば上書きしません。
+- 声紋モデルはコピーしなくても、次の実行時にダウンロードし直されます。
+- 元の `~/.local/share/kikiwake/` は使われなくなります。新しい場所で動くのを確かめてから、不要なら Finder で消してください。
+
+### 3. API キーを設定する
+
+Aqua Voice の API キーを、`KIKIWAKE_HOME` の中のファイル `aquavoice_api_key` に書きます。ターミナルで次を実行し、
+キーを貼り付けて Enter を押します（キーは画面にもシェルの履歴にも残りません）。
+
+```bash
+read -rs "key?API キーを貼り付けて Enter: "; echo
+(umask 077; printf '%s\n' "$key" > ~/Documents/kikiwake/.kikiwake/aquavoice_api_key); unset key
+chmod 600 ~/Documents/kikiwake/.kikiwake/aquavoice_api_key
+[ -s ~/Documents/kikiwake/.kikiwake/aquavoice_api_key ] && echo "キーのファイルができました"
+```
+
+- `KIKIWAKE_HOME` を別の場所にした場合は、パスを読み替えてください。
+- **キーを AI のチャットに貼らないでください。** キーのファイルの中身を表示する必要もありません。
+- 環境変数でも渡せます（`~/.zshrc` に `export AQUAVOICE_API="…"`。`export` が無いと `kikiwake` に渡りません）。
+  `AQUAVOICE_API` → `AQUAVOICE_API_KEY` → `AQUA_API_KEY` の順に読み、どれも無いときにファイルを読みます。
+  環境変数は Cowork には届かないので、Cowork でも使うならファイルにしてください。
+- キーはログや出力に書き出しません。
+
+### 更新するとき
+
+```bash
+cd kikiwake
+git pull
+uv tool install --reinstall .
+```
+
+この README にあるコマンドが無いと言われる（例: `kikiwake index` で `invalid choice`）ときは、入っている版が古いので、
+同じように入れ直してください。声紋 DB と記録はそのまま残ります。
 
 ## 使い方
 
@@ -159,32 +209,11 @@ Claude の **Cowork** に会議の録音を渡すと、名前付きの文字起�
 以下は記録フォルダを `~/Documents/kikiwake` にする例です。**フォルダの名前は `kikiwake` にしてください**
 （スキルは `$HOME/mnt/kikiwake` を探します）。
 
-1. **記録フォルダを作ります。**
+1. **[インストール](#インストール) の 2・3 を済ませます。** 記録フォルダ `~/Documents/kikiwake`、`KIKIWAKE_HOME`、
+   API キーのファイルができ、Mac の `kikiwake` が Cowork と同じ声紋 DB を使うようになります。
+   Cowork だけで使う場合も必要です（1 の `kikiwake` 本体は、Mac に入れなくてもかまいません）。
 
-   ```bash
-   mkdir -p ~/Documents/kikiwake/.kikiwake
-   ```
-
-2. **API キーのファイルを、Mac のターミナルで作ります。** チャットにキーを貼らないでください。
-   次のコマンドは、キーを画面にもシェルの履歴にも残しません。
-
-   ```bash
-   read -rs "key?API キーを貼り付けて Enter: "; echo
-   (umask 077; printf '%s\n' "$key" > ~/Documents/kikiwake/.kikiwake/aquavoice_api_key); unset key
-   chmod 600 ~/Documents/kikiwake/.kikiwake/aquavoice_api_key
-   ```
-
-3. **Mac 側の `~/.zshrc` に `KIKIWAKE_HOME` を書きます。** Mac の `kikiwake` が Cowork と同じ声紋 DB を使うようになります。
-
-   ```bash
-   echo 'export KIKIWAKE_HOME="$HOME/Documents/kikiwake/.kikiwake"' >> ~/.zshrc
-   source ~/.zshrc
-   ```
-
-   すでに `~/.local/share/kikiwake/` に声紋 DB（`db.json`）と声紋モデル（`models/`）があれば、
-   中身を `~/Documents/kikiwake/.kikiwake/` に移してください。
-
-4. **スキルの ZIP を作ります。** スクリプトは自分の場所からリポジトリのルートを探すので、どのディレクトリから実行してもかまいません
+2. **スキルの ZIP を作ります。** スクリプトは自分の場所からリポジトリのルートを探すので、どのディレクトリから実行してもかまいません
    （`dist/` はリポジトリのルートに作られます）。
 
    ```bash
@@ -193,7 +222,7 @@ Claude の **Cowork** に会議の録音を渡すと、名前付きの文字起�
 
    `dist/kikiwake-skill.zip` ができます（ZIP のルートは `kikiwake/` で、中に `SKILL.md` があります）。
 
-5. **ZIP を Cowork にアップロードします。** Cowork の **Customize > Skills** から `dist/kikiwake-skill.zip` を選びます。
+3. **ZIP を Cowork にアップロードします。** Cowork の **Customize > Skills** から `dist/kikiwake-skill.zip` を選びます。
    `skill/SKILL.md` を直したら、ZIP を作り直してもう一度アップロードします。
    `kikiwake` 本体は会話ごとに GitHub の `master` から入るので、コードを直したときは GitHub に push してください。
 
@@ -276,7 +305,7 @@ iCloud に上げたくないときは、同期の対象外の場所に記録フ�
 
 - **「+ → Add folder で kikiwake フォルダを追加してください」と言われる**: 会話にフォルダが接続されていません。
   フォルダの名前が `kikiwake` であることも確かめてください。
-- **API キーが見つからない（終了コード 2）**: 準備の 2 を実行してください。
+- **API キーが見つからない（終了コード 2）**: [インストール](#インストール) の 3 を実行してください。
 - **インストールが失敗する**: Cowork の仮想マシンはネットワークが制限されています。エラーにブロックされたホストが出ていたら、
   Cowork の設定でネットワークの許可（許可するドメインの一覧）を確認し、そのドメインを追加してください
   （設定画面の名前や場所は、バージョンによって違うことがあります）。`kikiwake` が使うのは次のとおりです
@@ -302,7 +331,8 @@ iCloud に上げたくないときは、同期の対象外の場所に記録フ�
 | API キーのファイル（任意） | `$KIKIWAKE_HOME/aquavoice_api_key` |
 | 会議の記録 | 記録フォルダの `records/<録音の名前>/` と `index.md`（Cowork 向けの構成。[Cowork で使う](#cowork-で使う)） |
 
-`KIKIWAKE_HOME` で場所を変えられます（Cowork と共有するときは `~/Documents/kikiwake/.kikiwake`）。
+`KIKIWAKE_HOME` で場所を変えられます（Cowork と共有するときは `~/Documents/kikiwake/.kikiwake`。
+設定のしかたと、それまでの声紋 DB の移し方は [インストール](#インストール) の 2）。
 閾値などは `config.toml` で上書きできます（例: `auto_threshold = 0.65`）。
 
 文字起こし・作業データ・声紋 DB は個人情報を含むので、本人だけが読める権限で保存します。git にコミットしないでください。
