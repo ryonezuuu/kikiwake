@@ -6,7 +6,9 @@
 - 話者ごとの声を手元で**声紋**（話者埋め込みベクトル）にし、ローカルの声紋 DB と照合します。
   一度名前を教えた人は、別の会議の録音でも自動で同じ名前が付きます。
 - AI エージェント用のスキル（[`skill/SKILL.md`](skill/SKILL.md)）付き。AI チャットに音声ファイルを渡すと、
-  文字起こし → 未確定の話者を質問 → 名前を登録、までを AI が進めます。
+  文字起こし → 未確定の話者を質問 → 名前を登録 → 要点の記録、までを AI が進めます。
+  Claude の **Cowork** でも使えます（[Cowork で使う](#cowork-で使う)）。会議ごとの記録が溜まるので、
+  あとから「前回の会議で誰が何を言ったか」を AI に聞けます。
 
 ```markdown
 **[00:00:12] 田中**
@@ -36,7 +38,7 @@
 
 ## 必要なもの
 
-- macOS（Apple Silicon で動作確認。GPU 不要）
+- macOS（Apple Silicon で動作確認。GPU 不要）。Linux（Cowork の仮想マシン）では CPU 版の PyTorch を使います
 - [uv](https://docs.astral.sh/uv/)（Python 3.12 を自動で用意します）
 - `ffmpeg` / `ffprobe`（`brew install ffmpeg`）
 - Aqua Voice の API キー
@@ -58,7 +60,9 @@ echo 'export AQUAVOICE_API="ここにキー"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-`AQUAVOICE_API` → `AQUAVOICE_API_KEY` → `AQUA_API_KEY` の順に読みます。キーはログや出力に書き出しません。
+`AQUAVOICE_API` → `AQUAVOICE_API_KEY` → `AQUA_API_KEY` の順に読みます。どれも無ければ、
+`$KIKIWAKE_HOME/aquavoice_api_key`（1 行目にキーだけを書いたファイル）を読みます（Cowork ではこちらを使います）。
+キーはログや出力に書き出しません。
 
 初回の実行時に声紋モデル（約 90 MB）をダウンロードします。
 
@@ -110,6 +114,17 @@ kikiwake viz 会議.session.json
 
 話者ごとのピッチ（声の高さ）分布、長時間平均スペクトル、声紋の 2 次元マップを 1 枚の画像にします。
 
+### 5. 会議の一覧
+
+```bash
+kikiwake index ~/Documents/kikiwake
+```
+
+記録フォルダ（`records/<名前>/` に会議ごとの出力がある）を読み、会議の一覧 `index.md` を作ります
+（詳しくは [Cowork で使う](#cowork-で使う) の「記録フォルダの中身」）。`--json` で
+`{"index_path": …, "meetings": N, "skipped": […]}` を標準出力に出します。読めない `session.json` があっても
+止まらず、その会議を飛ばして標準エラーに警告を出します。
+
 ## AI スキルとして使う
 
 Claude Code などの AI エージェントにスキルとして読み込ませます。
@@ -120,22 +135,180 @@ ln -s "$PWD/skill" ~/.claude/skills/kikiwake
 
 AI チャットに音声ファイルを渡して「文字起こしして」と頼むと、AI が `kikiwake` を実行し、
 名前の分からない話者について「00:12:30 の『予算は来月までに…』と話している人は誰ですか？」のように尋ねます。
+名前が決まると、AI が要点（`summary.md`）を書き、会議の一覧（`index.md`）を更新します。
+
+## Cowork で使う
+
+Claude の **Cowork** に会議の録音を渡すと、名前付きの文字起こしと要点が**記録フォルダ**に会議ごとに溜まります。
+声紋 DB も同じフォルダに置くので、Cowork で名前を教えた人は、次の会議（Cowork でも Mac の Claude Code でも）で
+自動で名前が付きます。
+
+### しくみ
+
+- Cowork には 2 種類のシェルがあります。Mac 上の Linux 仮想マシンで動く「Mac 側」だけが、会話に接続した
+  Mac のフォルダを `$HOME/mnt/<フォルダ名>` に見られます。スキルは Mac 側のシェルで `kikiwake` を動かします
+  （クラウド側のシェルからは Mac のフォルダが見えないので使いません）。
+- 仮想マシンは**会話ごとに使い捨て**です。スキルが会話の最初に GitHub から `kikiwake` を入れます（数分かかります）。
+  声紋 DB・声紋モデル・API キー・記録は仮想マシンではなく記録フォルダにあるので、会話が変わっても残ります。
+- 接続したフォルダでは、ファイルの削除が既定で禁止されています。`kikiwake` とスキルは**記録フォルダのファイルを削除しません**
+  （保存は、置き換えではなく直接の書き込みで行います）。削除の許可を求められても許可しないでください
+  （許可すると、ゴミ箱を経由せずに消えます）。記録を消したいときは Finder で消します。
+
+### 準備（1 回だけ）
+
+以下は記録フォルダを `~/Documents/kikiwake` にする例です。**フォルダの名前は `kikiwake` にしてください**
+（スキルは `$HOME/mnt/kikiwake` を探します）。
+
+1. **記録フォルダを作ります。**
+
+   ```bash
+   mkdir -p ~/Documents/kikiwake/.kikiwake
+   ```
+
+2. **API キーのファイルを、Mac のターミナルで作ります。** チャットにキーを貼らないでください。
+   次のコマンドは、キーを画面にもシェルの履歴にも残しません。
+
+   ```bash
+   read -rs "key?API キーを貼り付けて Enter: "; echo
+   printf '%s\n' "$key" > ~/Documents/kikiwake/.kikiwake/aquavoice_api_key; unset key
+   chmod 600 ~/Documents/kikiwake/.kikiwake/aquavoice_api_key
+   ```
+
+3. **Mac 側の `~/.zshrc` に `KIKIWAKE_HOME` を書きます。** Mac の `kikiwake` が Cowork と同じ声紋 DB を使うようになります。
+
+   ```bash
+   echo 'export KIKIWAKE_HOME="$HOME/Documents/kikiwake/.kikiwake"' >> ~/.zshrc
+   source ~/.zshrc
+   ```
+
+   すでに `~/.local/share/kikiwake/` に声紋 DB（`db.json`）と声紋モデル（`models/`）があれば、
+   中身を `~/Documents/kikiwake/.kikiwake/` に移してください。
+
+4. **スキルの ZIP を作ります。** `dist/` はリポジトリのルートに作られます（実行するディレクトリは問いません）。
+
+   ```bash
+   bash scripts/make-skill-zip.sh
+   ```
+
+   `dist/kikiwake-skill.zip` ができます（ZIP のルートは `kikiwake/` で、中に `SKILL.md` があります）。
+
+5. **ZIP を Cowork にアップロードします。** Cowork の **Customize > Skills** から `dist/kikiwake-skill.zip` を選びます。
+   `skill/SKILL.md` を直したら、ZIP を作り直してもう一度アップロードします。
+   `kikiwake` 本体は会話ごとに GitHub の `master` から入るので、コードを直したときは GitHub に push してください。
+
+### 使い方
+
+1. 会議の録音を `~/Documents/kikiwake/`（中のどこでもよい）に置きます。`kikiwake` は録音を移動も削除もしません。
+2. Cowork の会話で、**+ → Add folder** から `kikiwake` フォルダを接続します。
+3. 「`20261026 102027-FA0D0F9E.m4a` を文字起こしして」のように頼みます。
+   AI が `kikiwake` を入れて（初回の会話では数分）、文字起こしを進め、名前の分からない人を尋ね、
+   名前を声紋 DB に登録し、要点を `summary.md` に書き、`index.md` を更新します。
+
+録音の長さの目安は 2 時間までです。Cowork の仮想マシンのメモリは約 3.8 GiB なので、それを超える録音は途中で失敗する
+ことがあります。その場合は Mac の Claude Code で処理してください。
+
+### 記録フォルダの中身
+
+```
+kikiwake/
+├─ 20261026 102027-FA0D0F9E.m4a        会議の録音（置いた場所のまま）
+├─ records/
+│   └─ 20261026 102027-FA0D0F9E/        会議ごとのフォルダ
+│        ├─ 20261026 102027-FA0D0F9E.md            名前付きの文字起こし
+│        ├─ 20261026 102027-FA0D0F9E.session.json  作業データ（Avalon の結果を含む）
+│        └─ summary.md                              AI が書く要点
+├─ index.md                              会議の一覧
+└─ .kikiwake/                            声紋 DB（db.json）、声紋モデル、設定、API キー（aquavoice_api_key）
+```
+
+**`index.md`** は会議の一覧です（`kikiwake index` が作ります。新しい会議が上）。
+
+```markdown
+| 日時 | 長さ | 参加者 | 要点 | 文字起こし |
+|---|---|---|---|---|
+| 2026-10-26 10:20 | 41 分 | 田中・佐藤・ほか1名 | 見積もりの前提を見直す… | [開く](<records/20261026 102027-FA0D0F9E/20261026 102027-FA0D0F9E.md>) |
+```
+
+- 日時は録音日時です（ボイスメモの `YYYYMMDD HHMMSS-…` という名前ならその日時、そうでなければファイルの更新日時）。
+- 参加者は、名前が確定した人を並べ、それ以外の話者は「ほかN名」とまとめます。
+- 要点は、同じ会議の `summary.md` の `要点:` の行（先頭 60 文字）です。
+
+**`summary.md`** は AI が文字起こしを読んで書く、決まった形の要点です。推測で事実を足さないようにしてあります。
+
+```markdown
+# 見積もりの前提の見直し（2026-10-26 10:20）
+
+要点: 見積もりの前提を見直し、来週の定例で再提示することにした
+
+## 決まったこと
+- …
+
+## 宿題（誰が・何を・いつまでに）
+- 佐藤: 見積もりを見直して共有する（来週の定例まで）
+
+## 主な論点（発言者付き）
+- 田中: …
+```
+
+名前を付け直したときは、AI が `summary.md` の名前も直して `index.md` を更新します。
+
+### 過去の会議を聞く
+
+「前回の会議で、誰が何を宿題にした？」のように聞くと、AI が `index.md` から該当する会議を探し、
+その会議の `summary.md`（必要なら文字起こし）を読んで、会議の日時を添えて答えます。
+
+### iCloud 同期の注意
+
+この Mac の「書類」フォルダが iCloud Drive で同期されていると、記録フォルダ（`~/Documents/kikiwake`）の中身は
+**すべて iCloud に上がります**。録音・文字起こし・要点・声紋 DB（`db.json`）・声紋モデル・API キーのファイルも含みます。
+iCloud に上げたくないときは、同期の対象外の場所に記録フォルダを作ってください（その場合は `KIKIWAKE_HOME` などのパスも合わせます）。
+
+また、「Mac のストレージを最適化」（Optimize Mac Storage）がオンだと、容量が足りないときにファイルが iCloud 側だけに置かれ、
+開くのに時間がかかることがあります。
+
+### 注意
+
+- **Cowork と Mac で同時に `kikiwake` を動かさないでください。** 同じ声紋 DB を同時に書くと、排他制御が効かないおそれがあります。
+- 処理の途中で会話が切れても、Avalon の結果は受け取った直後に保存されています。同じ録音にもう一度頼めば、再課金なしでやり直せます。
+
+### うまくいかないとき
+
+- **「+ → Add folder で kikiwake フォルダを追加してください」と言われる**: 会話にフォルダが接続されていません。
+  フォルダの名前が `kikiwake` であることも確かめてください。
+- **API キーが見つからない（終了コード 2）**: 準備の 2 を実行してください。
+- **インストールが失敗する**: Cowork の仮想マシンはネットワークが制限されています。エラーにブロックされたホストが出ていたら、
+  Cowork の設定のネットワークの許可リストにそのドメインを追加してください。`kikiwake` が使うのは次のとおりです
+  （API はまだ呼ばれていないので、失敗しても料金はかかりません）。
+
+  | ドメイン | 用途 |
+  |---|---|
+  | `api.aquavoice.com` | 文字起こし（Avalon API） |
+  | `pypi.org` / `files.pythonhosted.org` | Python パッケージ |
+  | `huggingface.co` | 声紋モデル |
+  | `github.com` | `kikiwake` 本体（`codeload.github.com` も使うことがあります） |
+  | `download.pytorch.org` / `download-r2.pytorch.org` | CPU 版 PyTorch（ファイルの実体は後者から配信されます） |
+
+  Python 3.12 の取得で `githubusercontent.com` 系のドメインが必要になることもあります。
 
 ## データの置き場所
 
 | もの | 場所 |
 |---|---|
-| 声紋 DB | `~/.local/share/kikiwake/db.json` |
-| 設定（任意） | `~/.local/share/kikiwake/config.toml` |
-| 声紋モデル | `~/.local/share/kikiwake/models/` |
+| 声紋 DB | `$KIKIWAKE_HOME/db.json`（既定は `~/.local/share/kikiwake/db.json`） |
+| 設定（任意） | `$KIKIWAKE_HOME/config.toml` |
+| 声紋モデル | `$KIKIWAKE_HOME/models/` |
+| API キーのファイル（任意） | `$KIKIWAKE_HOME/aquavoice_api_key` |
+| 会議の記録 | 記録フォルダの `records/<録音の名前>/` と `index.md`（Cowork 向けの構成。[Cowork で使う](#cowork-で使う)） |
 
-`KIKIWAKE_HOME` で場所を変えられます。閾値などは `config.toml` で上書きできます（例: `auto_threshold = 0.65`）。
+`KIKIWAKE_HOME` で場所を変えられます（Cowork と共有するときは `~/Documents/kikiwake/.kikiwake`）。
+閾値などは `config.toml` で上書きできます（例: `auto_threshold = 0.65`）。
 
 文字起こし・作業データ・声紋 DB は個人情報を含むので、本人だけが読める権限で保存します。git にコミットしないでください。
+（Cowork の接続フォルダでは `chmod` が効かず、権限は常に `600` に見えます。）
 
 ## 制限
 
-- 1 回の録音で区別できる話者は 8 人まで（Avalon の上限）。録音は 4 時間まで。
+- 1 回の録音で区別できる話者は 8 人まで（Avalon の上限）。録音は 4 時間まで（Cowork では 2 時間程度まで）。
 - 話者の境目で、発言の末尾が隣の人に付くことがあります（Avalon の話者分離の結果をそのまま使うため）。
 - 似た声質の人を Avalon が 1 人にまとめてしまうことがあります。
 - 閾値は初期値です。実際の会議で使いながら調整してください。
