@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from kikiwake.audio import load_wav, require_ffmpeg, to_wav16k
-from kikiwake.avalon import AvalonClient, get_api_key
+from kikiwake.avalon import API_KEY_FILENAME, AvalonClient, get_api_key
 from kikiwake.config import Settings, data_home, load_settings
 from kikiwake.embedder import DIM, MODEL_ID, EcapaEmbedder, Embedder
 from kikiwake.errors import AppError, UsageError
@@ -38,13 +38,13 @@ def make_embedder(home: Path) -> Embedder:
         return EcapaEmbedder(home / "models")
 
 
-def make_transcriber(settings: Settings) -> Transcriber:
+def make_transcriber(settings: Settings, key_file: Path | None = None) -> Transcriber:
     client: AvalonClient | None = None
 
     def transcribe(mp3: Path, opts: TranscribeOptions) -> dict:
         nonlocal client
         if client is None:  # the key is needed only once an API call really happens
-            client = AvalonClient(get_api_key(), settings)
+            client = AvalonClient(get_api_key(key_file=key_file), settings)
         return client.transcribe(
             mp3, language=opts.language, prompt=opts.prompt, max_speakers=opts.max_speakers
         )
@@ -119,7 +119,7 @@ def _cmd_transcribe(args: argparse.Namespace, home: Path, settings: Settings) ->
         settings=settings,
         open_db=lambda: _open_db(home, settings),
         embedder=make_embedder(home),
-        transcriber=make_transcriber(settings),
+        transcriber=make_transcriber(settings, key_file=home / API_KEY_FILENAME),
         now=_now,
     )
     _, _, png_path = session_paths(args.audio, args.output_dir)

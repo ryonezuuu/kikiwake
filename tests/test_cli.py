@@ -13,7 +13,7 @@ from conftest import raw_diarized, unit
 
 from kikiwake import cli
 from kikiwake.audio import SAMPLE_RATE
-from kikiwake.avalon import API_KEY_ENVS
+from kikiwake.avalon import API_KEY_ENVS, API_KEY_FILENAME
 from kikiwake.cli import main
 from kikiwake.config import Settings
 from kikiwake.errors import AppError, UsageError
@@ -87,7 +87,7 @@ def cli_env(tmp_path, monkeypatch):
     env = CliEnv(tmp_path)
     monkeypatch.setenv("KIKIWAKE_HOME", str(env.home))
     monkeypatch.setattr(cli, "make_embedder", lambda home: FreqEmbedder())
-    monkeypatch.setattr(cli, "make_transcriber", lambda settings: env.transcriber)
+    monkeypatch.setattr(cli, "make_transcriber", lambda settings, **kwargs: env.transcriber)
     return env
 
 
@@ -221,7 +221,31 @@ def test_missing_api_key_exit_2(cli_env, monkeypatch, capsys):
     assert main(["transcribe", str(cli_env.audio)]) == 2
     captured = capsys.readouterr()
     assert "AQUAVOICE_API" in captured.err and captured.out == ""
+    assert str(cli_env.home / API_KEY_FILENAME) in captured.err  # where to put the key file
     assert not cli_env.session_path.exists()
+
+
+def test_transcribe_reads_the_key_file_in_kikiwake_home(cli_env, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "make_transcriber", real_make_transcriber)
+    for k in API_KEY_ENVS:
+        monkeypatch.delenv(k, raising=False)
+    cli_env.home.mkdir()
+    (cli_env.home / API_KEY_FILENAME).write_text("file-key-123\n", encoding="utf-8")
+    built = []
+
+    class FakeClient:  # stands in for AvalonClient, so the real API is never reached
+        def __init__(self, key, settings):
+            built.append(key)
+
+        def transcribe(self, mp3, **kwargs):
+            return copy.deepcopy(cli_env.response)
+
+    monkeypatch.setattr(cli, "AvalonClient", FakeClient)
+    assert main(["transcribe", str(cli_env.audio), "--json"]) == 0
+    captured = capsys.readouterr()
+    assert built == ["file-key-123"]
+    assert "file-key-123" not in captured.out + captured.err
+    assert cli_env.session_path.exists()
 
 
 def test_cached_rerun_needs_no_api_key(cli_env, monkeypatch, capsys):

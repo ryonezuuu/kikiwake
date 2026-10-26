@@ -11,6 +11,7 @@ from kikiwake.config import Settings
 from kikiwake.errors import AppError, UsageError
 
 API_KEY_ENVS = ("AQUAVOICE_API", "AQUAVOICE_API_KEY", "AQUA_API_KEY")
+API_KEY_FILENAME = "aquavoice_api_key"
 
 _JOBS_PATH = "/v1/audio/transcription-jobs"
 _FAILED_STATUSES = frozenset({"failed", "cancelled", "abandoned"})
@@ -18,15 +19,33 @@ _POLL_GROWTH = 1.5
 _ERROR_BODY_CHARS = 300
 
 
-def get_api_key(env: Mapping[str, str] = os.environ) -> str:
+def _key_from_file(path: Path) -> str:
+    """The key on the first line of ``path``; ``""`` if it is missing, unreadable or blank."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    lines = text.strip().splitlines()
+    return lines[0].strip() if lines else ""
+
+
+def get_api_key(env: Mapping[str, str] = os.environ, key_file: Path | None = None) -> str:
+    """The API key from the environment variables, else from ``key_file`` (one line)."""
     for name in API_KEY_ENVS:
         value = env.get(name, "").strip()
         if value:
             return value
-    raise UsageError(
+    if key_file is not None:
+        value = _key_from_file(key_file)
+        if value:
+            return value
+    message = (
         "Avalon の API キーが見つかりません。次のいずれかの環境変数を設定してください: "
         + ", ".join(API_KEY_ENVS)
     )
+    if key_file is not None:
+        message += f" または次のファイルに API キーを 1 行で書いてください: {key_file}"
+    raise UsageError(message)
 
 
 def _log(message: str) -> None:

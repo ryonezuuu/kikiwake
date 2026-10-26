@@ -2,7 +2,7 @@ import httpx
 import pytest
 from conftest import raw_diarized
 
-from kikiwake.avalon import AvalonClient, get_api_key
+from kikiwake.avalon import API_KEY_FILENAME, AvalonClient, get_api_key
 from kikiwake.config import Settings
 from kikiwake.errors import AppError, UsageError
 
@@ -122,6 +122,90 @@ def test_get_api_key_missing():
     with pytest.raises(UsageError, match="AQUAVOICE_API") as excinfo:
         get_api_key({})
     assert "AQUAVOICE_API_KEY" in str(excinfo.value) and "AQUA_API_KEY" in str(excinfo.value)
+
+
+def test_the_key_file_name():
+    assert API_KEY_FILENAME == "aquavoice_api_key"
+
+
+def test_env_wins_over_file(tmp_path):
+    f = tmp_path / API_KEY_FILENAME
+    f.write_text("from-file\n")
+    assert get_api_key({"AQUAVOICE_API": "from-env"}, key_file=f) == "from-env"
+    assert get_api_key({"AQUA_API_KEY": "from-env"}, key_file=f) == "from-env"
+
+
+@pytest.mark.parametrize("content", ["k-123\n", "  k-123  ", "k-123\r\n", "\n k-123 \n\n"])
+def test_key_from_file_is_stripped(tmp_path, content):
+    f = tmp_path / API_KEY_FILENAME
+    f.write_bytes(content.encode())  # bytes, so that \r\n is kept as written
+    assert get_api_key({}, key_file=f) == "k-123"
+
+
+def test_only_the_first_line_of_the_file_is_the_key(tmp_path):
+    f = tmp_path / API_KEY_FILENAME
+    f.write_text("k-123\nnot-part-of-the-key\n")
+    assert get_api_key({}, key_file=f) == "k-123"
+
+
+def test_empty_env_values_fall_through_to_the_file(tmp_path):
+    f = tmp_path / API_KEY_FILENAME
+    f.write_text("k-123\n")
+    assert get_api_key({"AQUAVOICE_API": " ", "AQUA_API_KEY": ""}, key_file=f) == "k-123"
+
+
+def _unreadable_dir(f):
+    f.mkdir()  # reading a directory raises OSError
+
+
+def _not_utf8(f):
+    f.write_bytes(b"\xff\xfe\x00secret-bytes")
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda f: None,
+        lambda f: f.write_text(""),
+        lambda f: f.write_text(" \n"),
+        _unreadable_dir,
+        _not_utf8,
+    ],
+    ids=["missing", "empty", "blank", "unreadable", "not-utf8"],
+)
+def test_missing_or_unusable_file_is_a_usage_error_naming_the_file(tmp_path, make):
+    f = tmp_path / API_KEY_FILENAME
+    make(f)
+    with pytest.raises(UsageError) as e:
+        get_api_key({}, key_file=f)
+    message = str(e.value)
+    assert str(f) in message and "AQUAVOICE_API" in message
+    assert "secret-bytes" not in message
+
+
+def test_missing_key_without_a_file_does_not_mention_one():
+    with pytest.raises(UsageError) as e:
+        get_api_key({})
+    assert "ファイル" not in str(e.value)
+
+
+def test_file_key_never_in_messages(audio, clock, tmp_path):
+    f = tmp_path / API_KEY_FILENAME
+    f.write_text(KEY + "\n")
+    key = get_api_key({}, key_file=f)
+    body = f'{{"error": {{"message": "invalid api key: {key}"}}}}'
+    api = FakeApi(post=[reply(401, text=body)])
+    client = AvalonClient(
+        key,
+        Settings(),
+        http=httpx.Client(transport=httpx.MockTransport(api.handler)),
+        sleep=clock.sleep,
+        monotonic=clock.monotonic,
+    )
+    with pytest.raises(AppError) as excinfo:
+        client.transcribe(audio)
+    message = str(excinfo.value)
+    assert KEY[:5] not in message and "***" in message
 
 
 def test_job_flow_returns_result(audio, clock, capsys):
