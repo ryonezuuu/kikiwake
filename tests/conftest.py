@@ -1,6 +1,12 @@
+import shutil
+import subprocess
 from collections.abc import Sequence
+from pathlib import Path
 
 import numpy as np
+import pytest
+
+from speaker_transcribe.audio import to_wav16k
 
 
 def raw_diarized(
@@ -63,3 +69,18 @@ class FakeEmbedder:
     def embed(self, wave: np.ndarray) -> np.ndarray:
         vec = np.array([wave.mean(), 1.0, 0.0, 0.0], dtype=np.float32)
         return vec / np.linalg.norm(vec)
+
+
+def say_wav(voice: str, text: str, path: Path) -> Path:
+    """Synthesise ``text`` with macOS ``say`` and write it to ``path`` as 16 kHz mono WAV."""
+    if shutil.which("say") is None:
+        pytest.skip("macOS `say` is not available")
+    aiff = path.with_suffix(".aiff")
+    subprocess.run(
+        ["say", "-v", voice, "-o", str(aiff), text],
+        check=True,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+    )
+    to_wav16k(aiff, path)
+    return path
