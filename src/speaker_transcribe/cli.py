@@ -16,7 +16,7 @@ from speaker_transcribe.config import Settings, data_home, load_settings
 from speaker_transcribe.embedder import DIM, MODEL_ID, EcapaEmbedder, Embedder
 from speaker_transcribe.errors import AppError, UsageError
 from speaker_transcribe.labeling import apply_labels, clean_name
-from speaker_transcribe.pipeline import TranscribeOptions, Transcriber, run_transcribe
+from speaker_transcribe.pipeline import TranscribeOptions, Transcriber, check_audio, run_transcribe
 from speaker_transcribe.render import build_summary, render_markdown
 from speaker_transcribe.session import Session, load_session, save_session, session_paths
 from speaker_transcribe.speaker_db import SpeakerDB, atomic_write_text, locked
@@ -103,7 +103,9 @@ def _refresh_viz(session: Session, db: SpeakerDB, png_path: Path) -> Path | None
 
 
 def _cmd_transcribe(args: argparse.Namespace, home: Path, settings: Settings) -> int:
-    _load_db(home, settings)  # before the model and the API, so a mismatched DB fails fast
+    # Before the (slow) model load and the API call, so these mistakes fail fast.
+    check_audio(args.audio)
+    _load_db(home, settings)  # a DB made with another model
     opts = TranscribeOptions(
         output_dir=args.output_dir,
         language=args.language,

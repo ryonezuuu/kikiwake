@@ -61,6 +61,13 @@ def _progress(message: str) -> None:
     print(message, file=sys.stderr)
 
 
+def check_audio(audio: Path) -> None:
+    """Fail with a usage error unless ffmpeg is installed and ``audio`` is a file."""
+    require_ffmpeg()
+    if not audio.is_file():
+        raise UsageError(f"音声ファイルが見つかりません: {audio}")
+
+
 def _load_previous(path: Path, sha: str) -> Session | None:
     """The session saved at ``path`` if it is readable and made from the same audio."""
     if not path.exists():
@@ -148,9 +155,7 @@ def run_transcribe(
     The DB is opened (locked and loaded) only once the transcript and the voiceprints are ready,
     so a ``label`` run while the API is working is not overwritten; it is saved before the lock ends.
     """
-    require_ffmpeg()
-    if not audio.is_file():
-        raise UsageError(f"音声ファイルが見つかりません: {audio}")
+    check_audio(audio)
     sha = sha256_file(audio)
     markdown_path, session_path, _ = session_paths(audio, opts.output_dir)
     prev = _load_previous(session_path, sha)

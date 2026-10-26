@@ -1,6 +1,7 @@
 import copy
 import json
 import re
+import shutil
 import wave
 import warnings
 from contextlib import contextmanager
@@ -523,6 +524,21 @@ def test_commands_other_than_transcribe_do_not_load_the_model(cli_env, monkeypat
 def test_missing_audio_exit_2(cli_env, tmp_path, capsys):
     assert main(["transcribe", str(tmp_path / "nope.wav")]) == 2
     assert "音声ファイルが見つかりません" in capsys.readouterr().err
+
+
+def test_missing_audio_is_found_before_the_model_loads(cli_env, tmp_path, monkeypatch, capsys):
+    no_model(monkeypatch)
+    for missing in (tmp_path / "nope.wav", tmp_path):  # nothing there / not a file
+        assert main(["transcribe", str(missing)]) == 2
+        assert capsys.readouterr().err == f"エラー: 音声ファイルが見つかりません: {missing}\n"
+    assert cli_env.calls == []
+
+
+def test_missing_ffmpeg_is_found_before_the_model_loads(cli_env, monkeypatch, capsys):
+    no_model(monkeypatch)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    assert main(["transcribe", str(cli_env.audio)]) == 2
+    assert "brew install ffmpeg" in capsys.readouterr().err
 
 
 def test_os_errors_are_reported_without_a_traceback(cli_env, tmp_path, capsys):
