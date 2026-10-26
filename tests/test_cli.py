@@ -441,6 +441,26 @@ def test_session_created_at_is_local_iso8601_in_seconds(cli_env):
     assert ISO_SECONDS_WITH_OFFSET.fullmatch(load_session(cli_env.session_path).created_at)
 
 
+def test_times_follow_the_timezone_setting(cli_env, capsys):
+    cli_env.home.mkdir()
+    (cli_env.home / "config.toml").write_text('timezone = "Pacific/Honolulu"\n', encoding="utf-8")
+    main(["transcribe", str(cli_env.audio)])
+    main(["label", str(cli_env.session_path), "spk_0=田中"])
+    session = load_session(cli_env.session_path)
+    assert session.created_at.endswith("-10:00") and session.recorded_at.endswith("-10:00")
+    capsys.readouterr()
+    assert main(["speakers", "list", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)[0]["updated_at"].endswith("-10:00")
+
+
+def test_unknown_timezone_setting_exit_2(cli_env, capsys):
+    cli_env.home.mkdir()
+    (cli_env.home / "config.toml").write_text('timezone = "Asia/Tokio"\n', encoding="utf-8")
+    assert main(["transcribe", str(cli_env.audio)]) == 2
+    err = capsys.readouterr().err
+    assert "timezone" in err and "Asia/Tokio" in err and cli_env.calls == []
+
+
 def test_viz_command(cli_env, monkeypatch, capsys):
     main(["transcribe", str(cli_env.audio)])
     capsys.readouterr()

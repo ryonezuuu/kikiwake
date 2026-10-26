@@ -5,6 +5,7 @@ import wave
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pytest
@@ -623,3 +624,48 @@ def test_cached_rerun_decides_recorded_at_again(env):
     session, _, ss = env.run()
     assert env.calls == 1
     assert session.recorded_at == mtime_iso(later) == load_session(ss).recorded_at
+
+
+@pytest.mark.parametrize(
+    ("stem", "zone", "expected"),
+    [
+        ("20261016 125520-357FE498", "Asia/Tokyo", "2026-10-16T12:55:20+09:00"),
+        ("20261016 125520-357FE498", "UTC", "2026-10-16T12:55:20+00:00"),
+        ("20260716 090000-x", "America/New_York", "2026-07-16T09:00:00-04:00"),  # daylight saving
+        ("20261216 090000-x", "America/New_York", "2026-12-16T09:00:00-05:00"),
+    ],
+)
+def test_voice_memo_time_is_read_in_the_given_zone(tmp_path, stem, zone, expected):
+    p = tmp_path / f"{stem}.m4a"
+    p.write_bytes(b"x")
+    assert recorded_at_for(p, ZoneInfo(zone)) == expected
+
+
+@pytest.mark.parametrize("zone", ["Asia/Tokyo", "UTC", "Pacific/Honolulu"])
+def test_mtime_is_shown_in_the_given_zone(tmp_path, zone):
+    p = tmp_path / "meeting.m4a"
+    p.write_bytes(b"x")
+    os.utime(p, (MTIME, MTIME))
+    expected = datetime.fromtimestamp(MTIME, ZoneInfo(zone)).isoformat(timespec="seconds")
+    assert recorded_at_for(p, ZoneInfo(zone)) == expected
+
+
+@pytest.mark.parametrize("name", ["99991231 235959-x.m4a", "00010101 000000-x.m4a"])
+def test_stems_at_the_ends_of_the_calendar_fall_back_to_mtime(tmp_path, name):
+    p = tmp_path / name
+    p.write_bytes(b"x")
+    os.utime(p, (MTIME, MTIME))
+    assert recorded_at_for(p) == mtime_iso()  # the system zone cannot place them: no crash
+
+
+def test_pipeline_uses_the_timezone_setting(env, tmp_path):
+    env.settings = replace(env.settings, timezone="Pacific/Honolulu")
+    memo = tmp_path / "20261016 125520-357FE498.wav"
+    shutil.copy(env.audio, memo)
+    session, _, _ = env.run(audio=memo)
+    assert session.recorded_at == "2026-10-16T12:55:20-10:00"
+    os.utime(env.audio, (MTIME, MTIME))
+    session, _, _ = env.run()
+    assert session.recorded_at == datetime.fromtimestamp(MTIME, ZoneInfo("Pacific/Honolulu")).isoformat(
+        timespec="seconds"
+    )

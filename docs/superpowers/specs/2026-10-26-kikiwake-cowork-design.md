@@ -117,9 +117,18 @@ kikiwake/
 
 ### 3.4 録音日時を session に保存する
 
-- `Session` に `recorded_at: str | None`（ISO 8601、ローカル時刻、秒まで）を追加する。古い session.json に無くても読める。
+- `Session` に `recorded_at: str | None`（ISO 8601、UTC オフセット付き、秒まで）を追加する。古い session.json に無くても読める。
 - `transcribe` のときに決める: 録音の stem が `YYYYMMDD HHMMSS` で始まれば（ボイスメモ形式。例 `20261016 125520-357FE498`）その日時、
   そうでなければ録音ファイルの更新日時。キャッシュを再利用する再実行でも、毎回この規則で決め直す。
+  stem の日時がその時刻帯で表せない（暦の端など）ときも更新日時を使う（落ちない）。
+- **時刻帯**: Cowork の VM の時計は UTC のことが多く、そのままでは日付がずれる。そこで `config.toml` に
+  `timezone`（IANA 名。例 `timezone = "Asia/Tokyo"`。既定 `""` はシステムの時刻帯）を設ける。
+  `load_settings` が `zoneinfo.ZoneInfo` で確かめ、不正なら設定名を含む `UsageError`。
+  - ボイスメモの stem の日時はこの時刻帯の時刻として読み（`naive.replace(tzinfo=tz)`）、更新日時はこの時刻帯で表す
+    （`datetime.fromtimestamp(mtime, tz)`）。session の `created_at` と声紋 DB の `created_at` も同じ時刻帯で書く。
+  - `config.local_zone(settings)` がこの時刻帯を返す。空なら `None`（Python の「システムの時刻帯」。夏時間の規則も保たれる）。
+  - Linux で時刻帯のデータが無くても動くよう、依存関係に `tzdata` を入れる。
+  - 設定ファイルは `<KIKIWAKE_HOME>/config.toml`（記録フォルダの `.kikiwake/config.toml`）なので、Mac と Cowork で共通になる。
 
 ### 3.5 `kikiwake index ROOT [--json]`
 
@@ -197,6 +206,7 @@ kikiwake/
 1. `~/.local/share/kikiwake/` の中身（`db.json`（登録済み 4 人）、`models/`）を `~/Documents/kikiwake/.kikiwake/` に移す。
 2. ユーザーが `~/.zshrc` に `export KIKIWAKE_HOME="$HOME/Documents/kikiwake/.kikiwake"` を追加し、
    API キーを `~/Documents/kikiwake/.kikiwake/aquavoice_api_key` に書く（`chmod 600`）。
+   `~/Documents/kikiwake/.kikiwake/config.toml` に `timezone = "Asia/Tokyo"` を書く（§3.4）。
 3. 既存のサンプル会議（リポジトリの `sample/audio/`）を記録フォルダに移す: 録音を `~/Documents/kikiwake/` にコピーし、
    その `session.json` を `records/<stem>/` にコピーしてから `transcribe --output-dir records/<stem>` を実行する
    （SHA-256 が同じなので保存済みの結果を再利用し、API は呼ばない。確定済みの名前も付け直される）。

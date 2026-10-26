@@ -7,13 +7,14 @@ import tempfile
 import warnings
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, tzinfo
+from functools import partial
 from pathlib import Path
 
 from kikiwake.archive import write_index
 from kikiwake.audio import load_wav, require_ffmpeg, to_wav16k
 from kikiwake.avalon import API_KEY_FILENAME, AvalonClient, get_api_key
-from kikiwake.config import Settings, data_home, load_settings
+from kikiwake.config import Settings, data_home, load_settings, local_zone
 from kikiwake.embedder import DIM, MODEL_ID, EcapaEmbedder, Embedder
 from kikiwake.errors import AppError, UsageError
 from kikiwake.labeling import apply_labels, clean_name
@@ -53,8 +54,9 @@ def make_transcriber(settings: Settings, key_file: Path | None = None) -> Transc
     return transcribe
 
 
-def _now() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
+def _now(tz: tzinfo | None = None) -> str:
+    """Now, as ISO 8601 to the second in zone ``tz`` (``None``: the system's)."""
+    return datetime.now(tz).astimezone(tz).isoformat(timespec="seconds")
 
 
 def _db_path(home: Path) -> Path:
@@ -63,7 +65,13 @@ def _db_path(home: Path) -> Path:
 
 def _load_db(home: Path, settings: Settings) -> SpeakerDB:
     """The DB as saved, for reading only (writes replace the file atomically)."""
-    return SpeakerDB.load(_db_path(home), MODEL_ID, DIM, settings.max_samples_per_person)
+    return SpeakerDB.load(
+        _db_path(home),
+        MODEL_ID,
+        DIM,
+        settings.max_samples_per_person,
+        now=partial(_now, local_zone(settings)),  # when a sample is added
+    )
 
 
 @contextmanager
@@ -121,7 +129,7 @@ def _cmd_transcribe(args: argparse.Namespace, home: Path, settings: Settings) ->
         open_db=lambda: _open_db(home, settings),
         embedder=make_embedder(home),
         transcriber=make_transcriber(settings, key_file=home / API_KEY_FILENAME),
-        now=_now,
+        now=partial(_now, local_zone(settings)),
     )
     _, _, png_path = session_paths(args.audio, args.output_dir)
     viz_path = None

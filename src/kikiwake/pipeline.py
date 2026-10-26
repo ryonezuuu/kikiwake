@@ -6,7 +6,7 @@ import tempfile
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, tzinfo
 from pathlib import Path
 
 import numpy as np
@@ -19,7 +19,7 @@ from kikiwake.audio import (
     to_upload_mp3,
     to_wav16k,
 )
-from kikiwake.config import Settings
+from kikiwake.config import Settings, local_zone
 from kikiwake.embedder import Embedder
 from kikiwake.errors import AppError, UsageError
 from kikiwake.labeling import apply_label
@@ -77,21 +77,23 @@ def check_audio(audio: Path) -> None:
 _VOICE_MEMO_STEM = re.compile(r"^(\d{8}) (\d{6})")  # e.g. "20261016 125520-357FE498"
 
 
-def recorded_at_for(audio: Path) -> str:
-    """When ``audio`` was recorded: ISO 8601 in local time, to the second.
+def recorded_at_for(audio: Path, tz: tzinfo | None = None) -> str:
+    """When ``audio`` was recorded: ISO 8601 in zone ``tz`` (``None``: the system's), to the second.
 
-    A Voice Memos name (``YYYYMMDD HHMMSS-...``) holds the time; otherwise (or if the name is not a
-    real date and time) the file's modification time is used.
+    A Voice Memos name (``YYYYMMDD HHMMSS-...``) holds the time, read as a time in ``tz``; otherwise
+    (or if the name is not a date and time that can be placed in ``tz``) the file's modification
+    time is used.
     """
     found = _VOICE_MEMO_STEM.match(audio.stem)
     if found is not None:
         try:
-            when = datetime.strptime(" ".join(found.groups()), "%Y%m%d %H%M%S")
-        except ValueError:
-            pass  # not a real date and time
-        else:
-            return when.astimezone().isoformat(timespec="seconds")
-    return datetime.fromtimestamp(audio.stat().st_mtime).astimezone().isoformat(timespec="seconds")
+            naive = datetime.strptime(" ".join(found.groups()), "%Y%m%d %H%M%S")
+            # astimezone(None) turns a naive time into the system's local time.
+            return naive.replace(tzinfo=tz).astimezone(tz).isoformat(timespec="seconds")
+        except (ValueError, OverflowError, OSError):
+            pass  # not a real date and time, or one at the very ends of the calendar
+    mtime = datetime.fromtimestamp(audio.stat().st_mtime, tz)
+    return mtime.astimezone(tz).isoformat(timespec="seconds")
 
 
 def _load_previous(path: Path) -> Session | None:
@@ -184,7 +186,8 @@ def run_transcribe(
     """
     check_audio(audio)
     sha = sha256_file(audio)
-    recorded_at = recorded_at_for(audio)  # decided afresh on every run, while the audio is there
+    # Decided afresh on every run, while the audio is there.
+    recorded_at = recorded_at_for(audio, local_zone(settings))
     markdown_path, session_path, _ = session_paths(audio, opts.output_dir)
     prev = _load_previous(session_path)
     if prev is not None and prev.audio_sha256 != sha:

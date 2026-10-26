@@ -2,7 +2,9 @@ import os
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
+from datetime import tzinfo
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from kikiwake.errors import UsageError
 
@@ -28,6 +30,18 @@ class Settings:
     max_duration: float = 14400.0
     model: str = "avalon-v1.5"
     base_url: str = "https://api.aquavoice.com"
+    # IANA name (e.g. "Asia/Tokyo") for the times kikiwake writes; "" is the system's zone
+    # (in a Cowork VM likely UTC, hence this setting).
+    timezone: str = ""
+
+
+def local_zone(settings: Settings) -> tzinfo | None:
+    """The zone of the times kikiwake writes (``recorded_at``, ``created_at``).
+
+    ``None`` when ``timezone`` is empty: Python's own "system local time" (``datetime.astimezone()``),
+    which, unlike a snapshot of today's offset, keeps the system zone's daylight saving rules.
+    """
+    return ZoneInfo(settings.timezone) if settings.timezone else None
 
 
 def data_home(env: Mapping[str, str] = os.environ) -> Path:
@@ -66,4 +80,13 @@ def load_settings(home: Path) -> Settings:
                 f"got {type(value).__name__}"
             )
         overrides[key] = expected(value)
+    zone = overrides.get("timezone", "")
+    if zone:
+        try:
+            ZoneInfo(zone)
+        except (ZoneInfoNotFoundError, ValueError, OSError):  # unknown, a path, a directory
+            raise UsageError(
+                f"{path}: setting 'timezone' must be an IANA time zone name such as "
+                f"\"Asia/Tokyo\", got {zone!r}"
+            ) from None
     return Settings(**overrides)

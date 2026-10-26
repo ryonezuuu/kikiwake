@@ -1,8 +1,9 @@
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
-from kikiwake.config import Settings, data_home, load_settings
+from kikiwake.config import Settings, data_home, load_settings, local_zone
 from kikiwake.errors import AppError, UsageError
 
 
@@ -44,3 +45,29 @@ def test_load_settings_wrong_type(tmp_path):
 
 def test_exit_codes():
     assert AppError("x").exit_code == 1 and UsageError("x").exit_code == 2
+
+
+def test_timezone_defaults_to_the_system_zone():
+    assert Settings().timezone == ""
+    assert local_zone(Settings()) is None  # Python's "system local time" (keeps its DST rules)
+
+
+@pytest.mark.parametrize("name", ["Asia/Tokyo", "UTC", "America/New_York"])
+def test_timezone_setting(tmp_path, name):
+    (tmp_path / "config.toml").write_text(f'timezone = "{name}"\n', encoding="utf-8")
+    settings = load_settings(tmp_path)
+    assert settings.timezone == name and local_zone(settings) == ZoneInfo(name)
+
+
+@pytest.mark.parametrize("name", ["Nowhere/City", "JST", "America", "../etc/passwd", "/etc/localtime"])
+def test_unknown_timezone_is_a_usage_error_naming_the_key(tmp_path, name):
+    (tmp_path / "config.toml").write_text(f'timezone = "{name}"\n', encoding="utf-8")
+    with pytest.raises(UsageError, match=r"config\.toml: setting 'timezone'") as e:
+        load_settings(tmp_path)
+    assert name in str(e.value)
+
+
+def test_timezone_must_be_a_string(tmp_path):
+    (tmp_path / "config.toml").write_text("timezone = 9\n", encoding="utf-8")
+    with pytest.raises(UsageError, match="timezone"):
+        load_settings(tmp_path)

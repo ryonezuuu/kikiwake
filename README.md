@@ -186,7 +186,14 @@ Claude の **Cowork** に会議の録音を渡すと、名前付きの文字起�
    すでに `~/.local/share/kikiwake/` に声紋 DB（`db.json`）と声紋モデル（`models/`）があれば、
    中身を `~/Documents/kikiwake/.kikiwake/` に移してください。
 
-4. **スキルの ZIP を作ります。** スクリプトは自分の場所からリポジトリのルートを探すので、どのディレクトリから実行してもかまいません
+4. **タイムゾーンを設定します。** Cowork の仮想マシンの時計は UTC のことがあるので、録音日時などを
+   日本時間で記録するよう、記録フォルダの `config.toml` に書きます（Mac と Cowork の両方に効きます）。
+
+   ```bash
+   printf '\ntimezone = "Asia/Tokyo"\n' >> ~/Documents/kikiwake/.kikiwake/config.toml
+   ```
+
+5. **スキルの ZIP を作ります。** スクリプトは自分の場所からリポジトリのルートを探すので、どのディレクトリから実行してもかまいません
    （`dist/` はリポジトリのルートに作られます）。
 
    ```bash
@@ -195,7 +202,7 @@ Claude の **Cowork** に会議の録音を渡すと、名前付きの文字起�
 
    `dist/kikiwake-skill.zip` ができます（ZIP のルートは `kikiwake/` で、中に `SKILL.md` があります）。
 
-5. **ZIP を Cowork にアップロードします。** Cowork の **Customize > Skills** から `dist/kikiwake-skill.zip` を選びます。
+6. **ZIP を Cowork にアップロードします。** Cowork の **Customize > Skills** から `dist/kikiwake-skill.zip` を選びます。
    `skill/SKILL.md` を直したら、ZIP を作り直してもう一度アップロードします。
    `kikiwake` 本体は会話ごとに GitHub の `master` から入るので、コードを直したときは GitHub に push してください。
 
@@ -238,6 +245,7 @@ kikiwake/
 ```
 
 - 日時は録音日時です（ボイスメモの `YYYYMMDD HHMMSS-…` という名前ならその日時、そうでなければファイルの更新日時）。
+  `config.toml` の `timezone` のタイムゾーンで記録します。
 - 参加者は、名前が確定した人を並べ、それ以外の話者は「ほかN名」とまとめます。
 - 要点は、同じ会議の `summary.md` の `要点:` の行（先頭 60 文字）です。
 
@@ -311,6 +319,8 @@ iCloud に上げたくないときは、同期の対象外の場所に記録フ�
 
 `KIKIWAKE_HOME` で場所を変えられます（Cowork と共有するときは `~/Documents/kikiwake/.kikiwake`）。
 閾値などは `config.toml` で上書きできます（例: `auto_threshold = 0.65`）。
+`timezone = "Asia/Tokyo"` のように書くと、録音日時・作成日時をそのタイムゾーン（IANA 名）で記録します
+（既定はシステムの設定。Cowork の仮想マシンでは UTC のことがあります）。
 
 文字起こし・作業データ・声紋 DB は個人情報を含むので、本人だけが読める権限で保存します。git にコミットしないでください。
 （Cowork の接続フォルダでは `chmod` が効かず、権限は常に `600` に見えます。）

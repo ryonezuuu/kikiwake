@@ -60,6 +60,10 @@ fi
   ```
 
 - `KIKIWAKE_INPLACE_WRITES=1` は、ファイルの削除が禁止されたフォルダでも保存できるようにする設定。必ず付ける。
+- **タイムゾーン**: Cowork の VM の時計は UTC のことが多い。`grep -qs '^timezone' "$KIKIWAKE_HOME/config.toml"` が通らないときは、
+  録音日時などが VM の時刻帯で記録されてしまう。ユーザーにタイムゾーンを確認し（日本なら `Asia/Tokyo`）、了承を得てから
+  `printf '\ntimezone = "Asia/Tokyo"\n' >> "$KIKIWAKE_HOME/config.toml"` で追加する
+  （`<KIKIWAKE_HOME>/config.toml` は記録フォルダの `.kikiwake/` にあるので、Mac と Cowork の両方に効く）。
 - インストールに失敗したら、エラー内容をそのまま伝えて止まる（API はまだ呼ばれていないので料金はかからない）。
   ブロックされたホストが原因なら「うまくいかないとき」を見る。
 
