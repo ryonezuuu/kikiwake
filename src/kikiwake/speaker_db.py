@@ -6,7 +6,7 @@ import os
 import sys
 import tempfile
 import uuid
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -18,6 +18,9 @@ import numpy as np
 from kikiwake.errors import UsageError
 
 DB_VERSION = 1
+
+_INPLACE_WRITES_ENV = "KIKIWAKE_INPLACE_WRITES"
+_INPLACE_TRUE = frozenset({"1", "true", "yes"})
 
 _WAITING = "別の kikiwake が DB を使用中のため待機しています…"
 
@@ -40,20 +43,60 @@ class _Person:
     samples: list[Sample] = field(default_factory=list)  # in insertion order
 
 
+def inplace_writes_enabled(env: Mapping[str, str] = os.environ) -> bool:
+    """True if ``KIKIWAKE_INPLACE_WRITES`` is ``1`` / ``true`` / ``yes`` (case and surrounding spaces ignored).
+
+    Set by the Cowork skill, where the records folder forbids deleting or replacing files.
+    """
+    return env.get(_INPLACE_WRITES_ENV, "").strip().lower() in _INPLACE_TRUE
+
+
+def _write_in_place(path: Path, text: str) -> None:
+    """Write ``text`` straight into ``path`` (no temp file, no replace); it may be torn if we are killed midway."""
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
+def _unlink_quietly(path: Path) -> None:
+    """Remove our own leftover temp file; where deleting is forbidden it just stays (its name starts with a dot)."""
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def atomic_write_text(path: Path, text: str) -> None:
-    """Write ``text`` to ``path`` via a temp file in the same directory and ``os.replace``."""
+    """Write ``text`` to ``path`` via a temp file in the same directory and ``os.replace``.
+
+    Where replacing files is forbidden, write in place instead: always when ``KIKIWAKE_INPLACE_WRITES``
+    is on (see :func:`inplace_writes_enabled`), otherwise once ``os.replace`` raises ``PermissionError``.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    if inplace_writes_enabled():
+        _write_in_place(path, text)
+        return
     tmp = tempfile.NamedTemporaryFile(
         "w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
     )
     tmp_path = Path(tmp.name)
+    replace_denied = False
     try:
         with tmp:
             tmp.write(text)
-        os.replace(tmp_path, path)
+        try:
+            os.replace(tmp_path, path)
+        except PermissionError:
+            replace_denied = True
     except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise
+    if replace_denied:
+        try:
+            _write_in_place(path, text)
+        finally:
+            _unlink_quietly(tmp_path)
 
 
 @contextmanager

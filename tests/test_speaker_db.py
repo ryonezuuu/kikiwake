@@ -1,8 +1,10 @@
+import errno
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -10,7 +12,7 @@ import numpy as np
 import pytest
 
 from kikiwake.errors import UsageError
-from kikiwake.speaker_db import SpeakerDB, atomic_write_text, locked
+from kikiwake.speaker_db import SpeakerDB, atomic_write_text, inplace_writes_enabled, locked
 
 DIM = 192
 
@@ -339,6 +341,166 @@ def test_atomic_write_failure_keeps_old_file_and_cleans_up(tmp_path, monkeypatch
         atomic_write_text(path, "new")
     assert path.read_text(encoding="utf-8") == "old"
     assert [p.name for p in tmp_path.iterdir()] == ["f.json"]
+
+
+@pytest.fixture(autouse=True)
+def _temp_file_mode(monkeypatch):
+    """Start every test in the default (temp file + replace) mode; tests opt in to in-place."""
+    monkeypatch.delenv("KIKIWAKE_INPLACE_WRITES", raising=False)
+
+
+def deny(message):
+    """A stand-in that raises ``PermissionError(message)`` whatever it is called with."""
+
+    def raiser(*args, **kwargs):
+        raise PermissionError(message)
+
+    return raiser
+
+
+def forbid_temp_files(monkeypatch):
+    """Make any attempt to create a temp file fail the test."""
+
+    def no_temp(*args, **kwargs):
+        pytest.fail("a temp file was created")
+
+    monkeypatch.setattr(tempfile, "NamedTemporaryFile", no_temp)
+
+
+def test_inplace_mode_creates_no_temp_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("KIKIWAKE_INPLACE_WRITES", "1")
+    forbid_temp_files(monkeypatch)
+    p = tmp_path / "db.json"
+    p.write_text("old", encoding="utf-8")
+    atomic_write_text(p, "new")
+    assert p.read_text(encoding="utf-8") == "new"
+    assert [q.name for q in tmp_path.iterdir()] == ["db.json"]
+
+
+def test_inplace_mode_creates_parent_directory_and_new_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("KIKIWAKE_INPLACE_WRITES", "1")
+    forbid_temp_files(monkeypatch)
+    p = tmp_path / "records" / "2026" / "meeting.md"
+    atomic_write_text(p, "議事録")
+    assert p.read_text(encoding="utf-8") == "議事録"
+    assert [q.name for q in p.parent.iterdir()] == ["meeting.md"]
+
+
+def test_inplace_mode_never_calls_os_replace(tmp_path, monkeypatch):
+    monkeypatch.setenv("KIKIWAKE_INPLACE_WRITES", "1")
+    monkeypatch.setattr(os, "replace", deny("replace must not be used"))
+    p = tmp_path / "db.json"
+    p.write_text("old", encoding="utf-8")
+    atomic_write_text(p, "new")
+    assert p.read_text(encoding="utf-8") == "new"
+
+
+def test_inplace_mode_flushes_then_fsyncs(tmp_path, monkeypatch):
+    monkeypatch.setenv("KIKIWAKE_INPLACE_WRITES", "1")
+    p = tmp_path / "f.json"
+    on_disk_at_fsync = []
+    real_fsync = os.fsync
+
+    def spy(fd):
+        on_disk_at_fsync.append(p.read_text(encoding="utf-8"))  # already flushed from Python's buffer
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", spy)
+    atomic_write_text(p, "x")
+    assert on_disk_at_fsync == ["x"]
+
+
+def test_inplace_mode_is_read_when_called_not_when_imported(tmp_path, monkeypatch):
+    p = tmp_path / "f.txt"
+    atomic_write_text(p, "temp-mode")  # fixture: flag unset -> temp file + replace
+    seen = []
+    real_replace = os.replace
+    monkeypatch.setattr(os, "replace", lambda src, dst: seen.append(src) or real_replace(src, dst))
+    atomic_write_text(p, "second")
+    assert len(seen) == 1  # default mode used os.replace
+    monkeypatch.setenv("KIKIWAKE_INPLACE_WRITES", "true")
+    atomic_write_text(p, "third")
+    assert len(seen) == 1 and p.read_text(encoding="utf-8") == "third"
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [("1", True), ("true", True), ("YES", True), (" yes ", True), ("True", True),
+     ("0", False), ("", False), ("no", False), ("false", False), ("2", False)],
+)
+def test_inplace_flag_values(value, expected):
+    assert inplace_writes_enabled({"KIKIWAKE_INPLACE_WRITES": value}) is expected
+
+
+def test_inplace_flag_unset_is_false():
+    assert inplace_writes_enabled({}) is False
+
+
+def test_inplace_flag_defaults_to_the_process_environment(monkeypatch):
+    assert inplace_writes_enabled() is False
+    monkeypatch.setenv("KIKIWAKE_INPLACE_WRITES", "yes")
+    assert inplace_writes_enabled() is True
+
+
+def test_replace_denied_falls_back_to_writing_in_place(tmp_path, monkeypatch):
+    p = tmp_path / "db.json"
+    p.write_text("old", encoding="utf-8")
+    monkeypatch.setattr(os, "replace", deny("denied"))
+    atomic_write_text(p, "new")
+    assert p.read_text(encoding="utf-8") == "new"
+    assert [q.name for q in tmp_path.iterdir()] == ["db.json"]  # the temp file was removed
+
+
+def test_replace_denied_for_a_new_file_still_writes_it(tmp_path, monkeypatch):
+    p = tmp_path / "sub" / "db.json"
+    monkeypatch.setattr(os, "replace", deny("denied"))
+    atomic_write_text(p, "new")
+    assert p.read_text(encoding="utf-8") == "new"
+
+
+def test_replace_denied_and_unlink_denied_still_succeeds(tmp_path, monkeypatch):
+    p = tmp_path / "db.json"
+    p.write_text("old", encoding="utf-8")
+    monkeypatch.setattr(os, "replace", deny("denied"))
+    monkeypatch.setattr(Path, "unlink", deny("deletion is forbidden"))
+    atomic_write_text(p, "new")  # no exception
+    assert p.read_text(encoding="utf-8") == "new"
+    leftovers = [q.name for q in tmp_path.iterdir() if q.name != "db.json"]
+    assert len(leftovers) == 1
+    assert re.fullmatch(r"\.db\.json\..+\.tmp", leftovers[0])  # hidden, recognisable temp file
+
+
+def test_replace_denied_and_in_place_write_fails_raises_that_error_and_cleans_up(tmp_path, monkeypatch):
+    p = tmp_path / "target"
+    p.mkdir()  # opening a directory for writing fails
+    monkeypatch.setattr(os, "replace", deny("denied"))
+    with pytest.raises(IsADirectoryError):
+        atomic_write_text(p, "new")
+    assert [q.name for q in tmp_path.iterdir()] == ["target"]
+
+
+def test_replace_denied_and_in_place_write_fails_and_unlink_denied_keeps_the_write_error(tmp_path, monkeypatch):
+    p = tmp_path / "target"
+    p.mkdir()
+    monkeypatch.setattr(os, "replace", deny("denied"))
+    monkeypatch.setattr(Path, "unlink", deny("deletion is forbidden"))
+    with pytest.raises(IsADirectoryError):
+        atomic_write_text(p, "new")
+
+
+def test_other_errors_still_clean_up_and_raise(tmp_path, monkeypatch):
+    p = tmp_path / "db.json"
+    p.write_text("old", encoding="utf-8")
+
+    def eio(src, dst):
+        raise OSError(errno.EIO, "input/output error")
+
+    monkeypatch.setattr(os, "replace", eio)
+    with pytest.raises(OSError, match="input/output error") as info:
+        atomic_write_text(p, "new")
+    assert not isinstance(info.value, PermissionError)
+    assert p.read_text(encoding="utf-8") == "old"  # not written in place
+    assert [q.name for q in tmp_path.iterdir()] == ["db.json"]
 
 
 def test_save_creates_missing_parent_directory(tmp_path):
