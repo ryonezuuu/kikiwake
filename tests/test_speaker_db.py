@@ -53,10 +53,15 @@ def test_remove_samples_ignores_missing_and_drops_empty_person(tmp_path):
 
 def test_remove_by_session(tmp_path):
     db = new_db(tmp_path)
-    db.add_sample("田中", unit(0), "A", "auto")
+    a = db.add_sample("田中", unit(0), "A", "auto")
     db.add_sample("田中", unit(0), "B", "label")
-    db.add_sample("佐藤", unit(1), "A", "label")
-    assert db.remove_by_session("A") == 2
+    b = db.add_sample("佐藤", unit(1), "A", "label")
+    removed = db.remove_by_session("A")
+    assert {name: [(s.id, s.source) for s in samples] for name, samples in removed.items()} == {
+        "田中": [(a, "auto")],
+        "佐藤": [(b, "label")],
+    }
+    assert np.array_equal(removed["佐藤"][0].embedding, unit(1))
     assert list(db.people()) == ["田中"] and db.people()["田中"][0].session_sha256 == "B"
 
 
@@ -270,10 +275,10 @@ def test_remove_samples_keeps_other_samples_of_the_person(tmp_path):
     assert [s.id for s in db.people()["田中"]] == [b]
 
 
-def test_remove_by_session_with_no_match_returns_zero(tmp_path):
+def test_remove_by_session_with_no_match_returns_nothing(tmp_path):
     db = new_db(tmp_path)
     db.add_sample("田中", unit(0), "A", "auto")
-    assert db.remove_by_session("Z") == 0
+    assert db.remove_by_session("Z") == {}
     assert list(db.people()) == ["田中"]
 
 

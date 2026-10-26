@@ -32,7 +32,8 @@ def resolve_key(session: Session, key: str) -> str:
     )
 
 
-def _clean_name(name: str) -> str:
+def clean_name(name: str) -> str:
+    """``name`` without surrounding blanks; a usage error if that is empty or ends in ``？`` / ``?``."""
     cleaned = name.strip()
     if not cleaned:
         raise UsageError("名前が空です")
@@ -67,7 +68,7 @@ def apply_labels(session: Session, db: SpeakerDB, pairs: list[tuple[str, str]]) 
     Every KEY and NAME is checked before anything changes, so a bad pair leaves ``session``
     and ``db`` untouched. The caller saves both.
     """
-    resolved = [(resolve_key(session, key), _clean_name(name)) for key, name in pairs]
+    resolved = [(resolve_key(session, key), clean_name(name)) for key, name in pairs]
     ids = [sid for sid, _ in resolved]
     for sid in dict.fromkeys(ids):
         if ids.count(sid) > 1:

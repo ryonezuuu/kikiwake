@@ -15,7 +15,7 @@ from speaker_transcribe.avalon import AvalonClient, get_api_key
 from speaker_transcribe.config import Settings, data_home, load_settings
 from speaker_transcribe.embedder import DIM, MODEL_ID, EcapaEmbedder, Embedder
 from speaker_transcribe.errors import AppError, UsageError
-from speaker_transcribe.labeling import apply_labels
+from speaker_transcribe.labeling import apply_labels, clean_name
 from speaker_transcribe.pipeline import TranscribeOptions, Transcriber, run_transcribe
 from speaker_transcribe.render import build_summary, render_markdown
 from speaker_transcribe.session import Session, load_session, save_session, session_paths
@@ -168,11 +168,12 @@ def _cmd_speakers_list(args: argparse.Namespace, home: Path, settings: Settings)
 
 
 def _cmd_speakers_rename(args: argparse.Namespace, home: Path, settings: Settings) -> int:
+    new = clean_name(args.new)  # the same rules as names given to `label`
     with _open_db(home, settings) as db:
-        db.rename(args.old, args.new)
+        db.rename(args.old, new)
         db.save()
     if args.json:
-        _print_json({"renamed": {"from": args.old, "to": args.new}})
+        _print_json({"renamed": {"from": args.old, "to": new}})
     return 0
 
 

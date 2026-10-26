@@ -190,13 +190,111 @@ def test_force_api_without_confirmed_labels_does_not_warn(env):
     assert env.calls == 2 and s2.warnings == []
 
 
-def test_moved_audio_does_not_self_match(env, tmp_path):
-    label_first_run(env)
+def moved_copy(env, tmp_path):
     moved = tmp_path / "moved" / "meeting.wav"
     moved.parent.mkdir()
     shutil.copy(env.audio, moved)
+    return moved
+
+
+def test_moved_audio_does_not_self_match_but_keeps_its_labels(env, tmp_path):
+    label_first_run(env)
+    s2, md, _ = env.run(audio=moved_copy(env, tmp_path))
+    assert env.calls == 2  # no session next to the moved file, so the API is called again
+    spk_0 = s2.speakers["spk_0"]
+    assert spk_0.scores == {}  # 自分自身の声紋は照合前に取り消し済み
+    assert (spk_0.status, spk_0.name) == ("confirmed", "田中")  # the label is carried over by voice
+    (sample,) = env.db.people()["田中"]
+    assert sample.source == "label" and spk_0.db_sample_ids == [sample.id]
+    assert s2.speakers["spk_1"].status == "unknown" and s2.warnings == []
+    assert "**[00:00:01] 田中**" in md.read_text()
+
+
+def test_moved_audio_reports_labels_it_cannot_carry_over(env, tmp_path):
+    label_first_run(env)
+    env.label(env.audio.with_suffix(".session.json"), [("spk_1", "佐藤")])
+    # This time spk_1 says too little to get a voiceprint, and spk_0's voice is nothing like 佐藤's.
+    env.response = raw_diarized(
+        clean_words("spk_0", 1.0, 9.0) + clean_words("spk_1", 11.0, 12.5), duration=DURATION
+    )
+    s2, md, _ = env.run(audio=moved_copy(env, tmp_path))
+    assert (s2.speakers["spk_0"].status, s2.speakers["spk_0"].name) == ("confirmed", "田中")
+    assert (s2.speakers["spk_1"].status, s2.speakers["spk_1"].name) == ("insufficient", None)
+    assert s2.warnings == [{"code": "labels_lost", "names": ["佐藤"]}]
+    assert "前回の名前付け（佐藤）を引き継げませんでした。" in md.read_text()
+    assert list(env.db.people()) == ["田中"]
+
+
+def test_moved_audio_gives_one_speaker_only_one_carried_over_label(env, tmp_path):
+    label_first_run(env)
+    env.label(env.audio.with_suffix(".session.json"), [("spk_1", "佐藤")])
+    # Now both voices come back as one speaker, close enough (0.71) to each label.
+    env.response = raw_diarized(
+        clean_words("spk_0", 1.0, 9.0) + clean_words("spk_0", 11.0, 19.0), duration=DURATION
+    )
+    s2, _, _ = env.run(audio=moved_copy(env, tmp_path))
+    assert (s2.speakers["spk_0"].status, s2.speakers["spk_0"].name) == ("confirmed", "田中")
+    assert s2.warnings == [{"code": "labels_lost", "names": ["佐藤"]}]
+
+
+def test_labels_are_carried_over_after_a_failed_first_try_at_the_new_place(env, tmp_path):
+    label_first_run(env)
+    moved = moved_copy(env, tmp_path)
+
+    class Failing(FreqEmbedder):
+        def embed(self, wave):
+            raise AppError("声紋の計算に失敗")
+
+    with pytest.raises(AppError):
+        env.run(audio=moved, embedder=Failing())  # leaves only the paid response next to it
     s2, _, _ = env.run(audio=moved)
-    assert s2.speakers["spk_0"].status == "unknown"  # 自分自身の声紋は取り消し済み
+    assert env.calls == 2
+    assert (s2.speakers["spk_0"].status, s2.speakers["spk_0"].name) == ("confirmed", "田中")
+    assert s2.warnings == []
+
+
+def test_cached_rerun_follows_a_rename(env):
+    label_first_run(env)
+    with env.open_db() as db:
+        db.rename("田中", "鈴木")
+        db.save()
+    s2, md, _ = env.run()
+    assert (s2.speakers["spk_0"].status, s2.speakers["spk_0"].name) == ("confirmed", "鈴木")
+    assert list(env.db.people()) == ["鈴木"]
+    assert [x.id for x in env.db.people()["鈴木"]] == s2.speakers["spk_0"].db_sample_ids
+    assert "**[00:00:01] 鈴木**" in md.read_text()
+
+
+def test_cached_rerun_does_not_bring_back_a_deleted_person(env, capsys):
+    label_first_run(env)
+    with env.open_db() as db:
+        db.delete("田中")
+        db.save()
+    capsys.readouterr()
+    s2, _, _ = env.run()
+    assert (s2.speakers["spk_0"].status, s2.speakers["spk_0"].name) == ("unknown", None)
+    assert env.db.people() == {} and s2.warnings == []
+    assert "警告" not in capsys.readouterr().err
+
+
+def test_cached_rerun_keeps_the_name_of_a_speaker_without_a_voiceprint(env, capsys):
+    env.response = raw_diarized(
+        clean_words("spk_0", 1.0, 9.0) + clean_words("spk_1", 11.0, 12.5), duration=DURATION
+    )
+    _, _, ss = env.run()
+    env.label(ss, [("spk_1", "佐藤")])
+    capsys.readouterr()
+    s2, _, _ = env.run()
+    assert (s2.speakers["spk_1"].status, s2.speakers["spk_1"].name) == ("confirmed", "佐藤")
+    assert "佐藤 は声紋が不足しているため" in capsys.readouterr().err
+
+
+def test_cached_rerun_keeps_a_label_whose_sample_was_evicted(env):
+    env.settings = replace(env.settings, max_samples_per_person=1)
+    label_first_run(env)
+    env.run(audio=env.other_meeting_same_voices)  # its auto sample of 田中 evicts the label sample
+    s2, _, _ = env.run()
+    assert (s2.speakers["spk_0"].status, s2.speakers["spk_0"].name) == ("confirmed", "田中")
 
 
 def test_changed_audio_at_same_path_is_not_served_from_cache(env):

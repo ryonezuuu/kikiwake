@@ -7,6 +7,8 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 from speaker_transcribe.audio import (
     load_wav,
     probe_duration,
@@ -19,7 +21,7 @@ from speaker_transcribe.config import Settings
 from speaker_transcribe.embedder import Embedder
 from speaker_transcribe.errors import AppError, UsageError
 from speaker_transcribe.labeling import apply_label
-from speaker_transcribe.matcher import assign, score_table
+from speaker_transcribe.matcher import assign, person_score, score_table
 from speaker_transcribe.models import parse_diarized
 from speaker_transcribe.render import render_markdown
 from speaker_transcribe.session import (
@@ -29,7 +31,7 @@ from speaker_transcribe.session import (
     save_session,
     session_paths,
 )
-from speaker_transcribe.speaker_db import SpeakerDB, atomic_write_text
+from speaker_transcribe.speaker_db import Sample, SpeakerDB, atomic_write_text
 from speaker_transcribe.voiceprint import build_voiceprint
 
 _TOO_LONG = "録音が 4 時間を超えています（上限 4 時間）"
@@ -65,6 +67,66 @@ def _load_previous(path: Path, sha: str) -> Session | None:
         _progress(f"警告: 既存のセッションを読み込めないため無視します: {e}")
         return None
     return prev if prev.audio_sha256 == sha else None
+
+
+def _relabel(session: Session, db: SpeakerDB, speaker_id: str, name: str) -> None:
+    for warning in apply_label(session, db, speaker_id, name):
+        _progress(f"警告: {warning}")
+
+
+def _restore_labels(
+    session: Session,
+    db: SpeakerDB,
+    prev: Session,
+    taken_back: dict[str, list[Sample]],
+    known: set[str],
+) -> None:
+    """Name again the speakers ``prev`` had confirmed (the cached response keeps the speaker ids).
+
+    A name follows its DB sample to whoever owns it now (``speakers rename``), and a person deleted
+    since is not brought back. A speaker without a voiceprint, or whose sample was evicted from a
+    person still in the DB (``known``), keeps the name it had.
+    """
+    owners = {sample.id: name for name, samples in taken_back.items() for sample in samples}
+    for sid, old in prev.speakers.items():
+        if old.status != "confirmed" or old.name is None or sid not in session.speakers:
+            continue
+        current = [owners[i] for i in old.db_sample_ids if i in owners]
+        if current:
+            _relabel(session, db, sid, current[0])
+        elif not old.db_sample_ids or old.name in known:
+            _relabel(session, db, sid, old.name)
+
+
+def _carry_over_labels(
+    session: Session, db: SpeakerDB, taken_back: dict[str, list[Sample]], settings: Settings
+) -> list[str]:
+    """Give each name this recording was labelled with to the new speaker who sounds most like it.
+
+    Used when the earlier session is not at hand, so speaker ids cannot be matched up: each person's
+    taken-back ``label`` samples are compared with the new voiceprints. Returns the names left over
+    (no speaker at ``auto_threshold``, or that speaker already got another name).
+    """
+    lost: list[str] = []
+    for name, samples in taken_back.items():
+        labelled = [s.embedding for s in samples if s.source == "label"]
+        if not labelled:
+            continue
+        similarity = {
+            sid: person_score(np.asarray(st.centroid, dtype=np.float32), labelled, 1)
+            for sid, st in session.speakers.items()
+            if st.centroid is not None
+        }
+        best = max(similarity, key=similarity.__getitem__, default=None)
+        if (
+            best is not None
+            and similarity[best] >= settings.auto_threshold
+            and session.speakers[best].status != "confirmed"
+        ):
+            _relabel(session, db, best, name)
+        else:
+            lost.append(name)
+    return lost
 
 
 def run_transcribe(
@@ -133,9 +195,10 @@ def run_transcribe(
             latest = _load_previous(session_path, sha)
             if latest is not None and latest.avalon_response == raw:
                 prev = cached = latest
+        known = set(db.people())
         # Take back this recording's earlier samples first, so it cannot match its own voices
         # and a rerun cannot add them twice.
-        db.remove_by_session(sha)
+        taken_back = db.remove_by_session(sha)
         scores = score_table(centroids, db.embeddings(), settings.top_k)
         matches = assign(scores, settings)
 
@@ -187,12 +250,15 @@ def run_transcribe(
             warnings=warnings,
         )
 
-        # With the cached response the speaker ids are unchanged, so earlier names can be restored.
-        if cached is not None:
-            for sid, old in cached.speakers.items():
-                if old.status == "confirmed" and old.name is not None and sid in speakers:
-                    for warning in apply_label(session, db, sid, old.name):
-                        _progress(f"警告: {warning}")
+        if prev is None or not prev.speakers:
+            # No earlier session here (the audio moved, or only the response was kept after a
+            # failure), so labels this recording had are found by voice instead.
+            lost = _carry_over_labels(session, db, taken_back, settings)
+            if lost:
+                session.warnings.append({"code": "labels_lost", "names": lost})
+        elif cached is not None:
+            # With the cached response the speaker ids are unchanged, so earlier names can be restored.
+            _restore_labels(session, db, cached, taken_back, known)
 
         db.save()
         save_session(session, session_path)

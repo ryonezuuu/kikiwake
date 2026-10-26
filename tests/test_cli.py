@@ -280,6 +280,29 @@ def test_speakers_delete_json(cli_env, capsys):
     assert captured.out == "" and captured.err.startswith("エラー: ")
 
 
+@pytest.mark.parametrize(
+    ("new", "message"),
+    [("鈴木?", "？"), ("鈴木？", "？"), ("  ", "名前が空です")],
+    ids=["half-width-question-mark", "full-width-question-mark", "blank"],
+)
+def test_speakers_rename_rejects_names_label_would_reject(cli_env, capsys, new, message):
+    main(["transcribe", str(cli_env.audio)])
+    main(["label", str(cli_env.session_path), "spk_0=田中"])
+    assert main(["speakers", "rename", "田中", new]) == 2
+    captured = capsys.readouterr()
+    assert message in captured.err
+    assert db_names(capsys) == ["田中"]
+
+
+def test_speakers_rename_strips_the_new_name(cli_env, capsys):
+    main(["transcribe", str(cli_env.audio)])
+    main(["label", str(cli_env.session_path), "spk_0=田中"])
+    capsys.readouterr()
+    assert main(["speakers", "rename", "田中", " 山田 太郎\t", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"renamed": {"from": "田中", "to": "山田 太郎"}}
+    assert db_names(capsys) == ["山田 太郎"]
+
+
 def test_speakers_list_human_format(cli_env, capsys):
     main(["transcribe", str(cli_env.audio)])
     main(["label", str(cli_env.session_path), "spk_0=田中", "spk_1=鈴木"])

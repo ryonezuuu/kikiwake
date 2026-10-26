@@ -18,7 +18,7 @@ def format_ts(seconds: float) -> str:
 
 
 def warning_messages(session: Session) -> list[str]:
-    """User-facing notes, grouped by kind in a fixed order (unconfirmed, limit, consistency, discarded)."""
+    """User-facing notes, grouped by kind in a fixed order (unconfirmed, limit, consistency, discarded, lost)."""
     messages: list[str] = []
     unconfirmed = sum(st.status in _UNCONFIRMED for st in session.speakers.values())
     if unconfirmed:
@@ -33,6 +33,9 @@ def warning_messages(session: Session) -> list[str]:
             messages.append(f"{label} の声に複数人が混ざっている可能性があります。")
     if "labels_discarded" in codes:
         messages.append("API を呼び直したため、前回の名前付けは破棄されました。")
+    for w in session.warnings:
+        if w["code"] == "labels_lost":
+            messages.append(f"前回の名前付け（{'・'.join(w['names'])}）を引き継げませんでした。")
     return messages
 
 

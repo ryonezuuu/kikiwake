@@ -150,6 +150,7 @@ def _warned():
         states={"spk_0": dict(status="auto", name="田中"), "spk_1": dict(status="unknown", number=2)},
     )
     s.warnings = [
+        {"code": "labels_lost", "names": ["佐藤", "山田 太郎"]},
         {"code": "low_consistency", "speaker": "spk_0"},
         {"code": "speaker_limit_reached"},
         {"code": "labels_discarded"},
@@ -163,6 +164,7 @@ def test_warning_order():
         "9 人以上いた可能性があり、一部の発言は別の話者に割り当てられています。",
         "田中 の声に複数人が混ざっている可能性があります。",
         "API を呼び直したため、前回の名前付けは破棄されました。",
+        "前回の名前付け（佐藤・山田 太郎）を引き継げませんでした。",
     ]
 
 

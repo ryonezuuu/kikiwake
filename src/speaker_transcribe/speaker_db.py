@@ -231,12 +231,16 @@ class SpeakerDB:
             del person.samples[oldest]
         return sample.id
 
-    def _remove_where(self, drop: Callable[[Sample], bool]) -> int:
-        removed = 0
+    def _remove_where(self, drop: Callable[[Sample], bool]) -> dict[str, list[Sample]]:
+        """Remove the matching samples (and anyone left without samples); return them by person."""
+        removed: dict[str, list[Sample]] = {}
         for name in list(self._people):
-            samples = self._people[name].samples
-            kept = [s for s in samples if not drop(s)]
-            removed += len(samples) - len(kept)
+            kept: list[Sample] = []
+            dropped: list[Sample] = []
+            for sample in self._people[name].samples:
+                (dropped if drop(sample) else kept).append(sample)
+            if dropped:
+                removed[name] = dropped
             if kept:
                 self._people[name].samples = kept
             else:
@@ -248,8 +252,8 @@ class SpeakerDB:
         wanted = set(ids)
         self._remove_where(lambda s: s.id in wanted)
 
-    def remove_by_session(self, session_sha256: str) -> int:
-        """Remove every sample taken from that session; return how many there were."""
+    def remove_by_session(self, session_sha256: str) -> dict[str, list[Sample]]:
+        """Remove every sample taken from that session; return them by the person they belonged to."""
         return self._remove_where(lambda s: s.session_sha256 == session_sha256)
 
     def rename(self, old: str, new: str) -> None:
