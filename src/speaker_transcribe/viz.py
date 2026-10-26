@@ -36,7 +36,7 @@ _SPEAKER_COLORS = (
 _OTHER_PERSON_COLORS = (
     "#7f7f7f", "#a8a8a8", "#565656", "#9c8f80", "#808f9c", "#8f9c80", "#c4c4c4", "#3f3f3f",
 )  # fmt: skip
-_DB_DOT_SIZE = 36  # a little larger than before, and see-through, so the dots show around the stars
+_DB_DOT_SIZE = 36  # big enough, and see-through, to show around the speakers' stars
 _DB_DOT_ALPHA = 0.5
 
 
