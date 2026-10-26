@@ -9,7 +9,7 @@ import pytest
 from conftest import raw_diarized, unit
 
 from speaker_transcribe import pipeline
-from speaker_transcribe.audio import SAMPLE_RATE
+from speaker_transcribe.audio import SAMPLE_RATE, sha256_file
 from speaker_transcribe.config import Settings
 from speaker_transcribe.errors import AppError, UsageError
 from speaker_transcribe.labeling import apply_labels
@@ -324,3 +324,32 @@ def test_label_made_while_a_cached_rerun_computes_voiceprints_is_kept(env):
     assert (s2.speakers["spk_1"].status, s2.speakers["spk_1"].name) == ("confirmed", "佐藤")
     assert [x.id for x in env.db.people()["佐藤"]] == s2.speakers["spk_1"].db_sample_ids
     assert load_session(ss).speakers["spk_1"].status == "confirmed"
+
+
+def test_paid_response_that_fails_to_parse_is_kept_and_not_bought_again(env):
+    env.response = {"turns": "not a list"}
+    with pytest.raises(AppError, match="応答形式"):
+        env.run()
+    kept = load_session(env.audio.with_suffix(".session.json"))
+    assert kept.avalon_response == {"turns": "not a list"}
+    assert (kept.speakers, kept.warnings, kept.audio_sha256) == ({}, [], sha256_file(env.audio))
+    with pytest.raises(AppError, match="応答形式"):
+        env.run()
+    assert env.calls == 1  # reused from the kept session (only --force-api buys it again)
+
+
+@pytest.mark.parametrize("failure", [AppError("声紋の計算に失敗"), KeyboardInterrupt()])
+def test_paid_response_is_kept_when_a_later_step_fails(env, failure):
+    class Failing(FreqEmbedder):
+        def embed(self, wave):
+            raise failure
+
+    with pytest.raises(type(failure)):
+        env.run(embedder=Failing())
+    assert load_session(env.audio.with_suffix(".session.json")).avalon_response == env.response
+    assert not env.db_path.exists() and not env.audio.with_suffix(".md").exists()
+
+    session, md, _ = env.run()
+    assert env.calls == 1
+    assert [s.display_label for s in session.speakers.values()] == ["話者1", "話者2"]
+    assert md.read_text().startswith("# meeting.wav の文字起こし")

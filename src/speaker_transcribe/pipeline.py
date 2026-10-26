@@ -104,6 +104,19 @@ def run_transcribe(
             to_upload_mp3(audio, mp3_path)
             _progress("文字起こし中…")
             raw = transcriber(mp3_path, opts)
+            # Keep the paid response at once: if anything below fails, the next run reuses it.
+            save_session(
+                Session(
+                    audio_path=str(audio),
+                    audio_sha256=sha,
+                    created_at=now(),
+                    model_id=embedder.model_id,
+                    avalon_response=raw,
+                    speakers={},
+                    warnings=[],
+                ),
+                session_path,
+            )
         wave = load_wav(wav_path)
 
     tr = parse_diarized(raw)
