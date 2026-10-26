@@ -2,9 +2,9 @@
 
 import numpy as np
 
-from speaker_transcribe.errors import UsageError
-from speaker_transcribe.session import Session, SpeakerState
-from speaker_transcribe.speaker_db import SpeakerDB
+from kikiwake.errors import UsageError
+from kikiwake.session import Session, SpeakerState
+from kikiwake.speaker_db import SpeakerDB
 
 
 def _fullwidth(text: str) -> str:

@@ -9,8 +9,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from speaker_transcribe.errors import UsageError
-from speaker_transcribe.speaker_db import SpeakerDB, atomic_write_text, locked
+from kikiwake.errors import UsageError
+from kikiwake.speaker_db import SpeakerDB, atomic_write_text, locked
 
 DIM = 192
 
@@ -349,7 +349,7 @@ def test_save_creates_missing_parent_directory(tmp_path):
     assert SpeakerDB.load(path, "m", DIM, 20).people().keys() == {"田中"}
 
 
-WAITING = "別の speaker-transcribe が DB を使用中のため待機しています…\n"
+WAITING = "別の kikiwake が DB を使用中のため待機しています…\n"
 
 
 def src_env() -> dict[str, str]:
@@ -374,7 +374,7 @@ def test_locked_makes_another_process_wait_and_say_so(tmp_path):
         """
         import sys
         from pathlib import Path
-        from speaker_transcribe.speaker_db import locked
+        from kikiwake.speaker_db import locked
         with locked(Path(sys.argv[1])):
             print("acquired")
         """
@@ -394,6 +394,6 @@ def test_locked_makes_another_process_wait_and_say_so(tmp_path):
 
 
 def test_speaker_db_does_not_import_torch():
-    code = "import sys, speaker_transcribe.speaker_db; sys.exit('torch' in sys.modules)"
+    code = "import sys, kikiwake.speaker_db; sys.exit('torch' in sys.modules)"
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
     assert subprocess.run([sys.executable, "-c", code], env=env).returncode == 0

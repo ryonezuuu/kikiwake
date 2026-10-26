@@ -3,8 +3,8 @@ from typing import Protocol
 
 import numpy as np
 
-from speaker_transcribe.audio import SAMPLE_RATE
-from speaker_transcribe.errors import AppError
+from kikiwake.audio import SAMPLE_RATE
+from kikiwake.errors import AppError
 
 MODEL_ID = "speechbrain/spkrec-ecapa-voxceleb"
 DIM = 192

@@ -15,11 +15,11 @@ from typing import Any, Literal, cast, get_args
 
 import numpy as np
 
-from speaker_transcribe.errors import UsageError
+from kikiwake.errors import UsageError
 
 DB_VERSION = 1
 
-_WAITING = "別の speaker-transcribe が DB を使用中のため待機しています…"
+_WAITING = "別の kikiwake が DB を使用中のため待機しています…"
 
 Source = Literal["auto", "label"]
 _SOURCES: tuple[str, ...] = get_args(Source)

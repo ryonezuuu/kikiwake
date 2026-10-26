@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from speaker_transcribe.errors import AppError, UsageError
+from kikiwake.errors import AppError, UsageError
 
 SAMPLE_RATE = 16000
 

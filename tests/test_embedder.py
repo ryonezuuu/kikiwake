@@ -7,19 +7,19 @@ import numpy as np
 import pytest
 from conftest import say_wav
 
-import speaker_transcribe
-from speaker_transcribe.audio import SAMPLE_RATE, load_wav
-from speaker_transcribe.embedder import DIM, MODEL_ID, EcapaEmbedder
-from speaker_transcribe.errors import AppError
+import kikiwake
+from kikiwake.audio import SAMPLE_RATE, load_wav
+from kikiwake.embedder import DIM, MODEL_ID, EcapaEmbedder
+from kikiwake.errors import AppError
 
 
 def test_importing_embedder_does_not_load_torch_or_speechbrain():
     code = (
-        "import sys; import speaker_transcribe.embedder; "
+        "import sys; import kikiwake.embedder; "
         "assert 'torch' not in sys.modules, 'torch was imported'; "
         "assert 'speechbrain' not in sys.modules, 'speechbrain was imported'"
     )
-    src_dir = Path(speaker_transcribe.__file__).parent.parent
+    src_dir = Path(kikiwake.__file__).parent.parent
     env = {**os.environ, "PYTHONPATH": str(src_dir)}
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
     assert result.returncode == 0, result.stderr

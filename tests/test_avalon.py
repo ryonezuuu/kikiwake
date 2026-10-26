@@ -2,9 +2,9 @@ import httpx
 import pytest
 from conftest import raw_diarized
 
-from speaker_transcribe.avalon import AvalonClient, get_api_key
-from speaker_transcribe.config import Settings
-from speaker_transcribe.errors import AppError, UsageError
+from kikiwake.avalon import AvalonClient, get_api_key
+from kikiwake.config import Settings
+from kikiwake.errors import AppError, UsageError
 
 KEY = "secret-key-123"
 JOBS = "/v1/audio/transcription-jobs"

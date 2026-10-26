@@ -4,7 +4,7 @@ from typing import Literal
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from speaker_transcribe.config import Settings
+from kikiwake.config import Settings
 
 # Stands in for a (speaker, person) pair with no score; far below any cosine, so it is never chosen over a real one.
 _MISSING = -1e9

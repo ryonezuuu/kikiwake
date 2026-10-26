@@ -1,18 +1,18 @@
 ---
-name: speaker-transcribe
+name: kikiwake
 description: 会議・打ち合わせの音声ファイルを、話者名付きで文字起こしする（Avalon API + ローカル声紋 DB）。音声/動画ファイル（m4a, mp3, wav, mp4 など）を渡されて「文字起こし」「議事録」「誰が何を話したか」を求められたときに使う。
 ---
 
-# speaker-transcribe
+# kikiwake
 
-会議音声を Avalon API で文字起こし・話者分離し、ローカルの声紋 DB と照合して話者に名前を付ける CLI `speaker-transcribe` を使う。
+会議音声を Avalon API で文字起こし・話者分離し、ローカルの声紋 DB と照合して話者に名前を付ける CLI `kikiwake` を使う。
 名前を一度教えれば声紋 DB に溜まり、次回以降の会議では同じ人に自動で名前が付く。
 
 ## 前提
 
-- `speaker-transcribe` が PATH 上にあること。無ければリポジトリのルートで `uv tool install .` を実行する。
+- `kikiwake` が PATH 上にあること。無ければリポジトリのルートで `uv tool install .` を実行する。
   コードを変更したあとは `uv tool install --reinstall .` で入れ直す。リポジトリのルートは、このスキルの
-  シンボリックリンク先の親ディレクトリ（`dirname "$(readlink ~/.claude/skills/speaker-transcribe)"`）。
+  シンボリックリンク先の親ディレクトリ（`dirname "$(readlink ~/.claude/skills/kikiwake)"`）。
 - `ffmpeg` / `ffprobe` が必要（無ければ `brew install ffmpeg`）。
 - Avalon の API キーは、ユーザーのシェル設定（`~/.zshrc` など）で `export AQUAVOICE_API=...` として設定された環境変数から読む
   （`AQUAVOICE_API` → `AQUAVOICE_API_KEY` → `AQUA_API_KEY` の順）。`export` を付けないと子プロセスに渡らない。
@@ -27,7 +27,7 @@ description: 会議・打ち合わせの音声ファイルを、話者名付き�
 ### 1. 文字起こしする
 
 ```bash
-speaker-transcribe transcribe "<音声ファイルのパス>" --json
+kikiwake transcribe "<音声ファイルのパス>" --json
 ```
 
 - パスは引用符で囲む。標準出力には JSON だけが出る。進捗は標準エラーに出る。
@@ -38,7 +38,7 @@ speaker-transcribe transcribe "<音声ファイルのパス>" --json
 - 保存済みの結果を再利用するときは `--language` / `--prompt` / `--max-speakers` は**反映されない**
   （標準エラーに「保存済みの文字起こしを再利用するため … は反映されません（反映するには --force-api）」と出る）。
   反映させたいときだけ `--force-api` を付ける（API の料金がもう一度かかるので、ユーザーに確認してから）。
-- 声の可視化画像（`<stem>.voices.png`）は、ユーザーが見たいと言ったときだけ `--viz` を付けて作る。あとから作るなら `speaker-transcribe viz "<session_path>"`。
+- 声の可視化画像（`<stem>.voices.png`）は、ユーザーが見たいと言ったときだけ `--viz` を付けて作る。あとから作るなら `kikiwake viz "<session_path>"`。
 
 **終了コードが 2 のとき**（API キー未設定、ffmpeg 未導入、引数不正、声紋 DB のモデル不一致）は、標準エラーの
 `エラー: ...` をそのままユーザーに伝え、直し方を案内して止まる。勝手にリトライしない。
@@ -82,7 +82,7 @@ speaker-transcribe transcribe "<音声ファイルのパス>" --json
 
 - `警告: ...`（`transcribe` / `label` とも）: 処理は成功している。内容をユーザーに伝える。
   `警告: 可視化をスキップしました: ...` のときは画像だけ作れなかった（`viz_path` は `null`）。
-- `別の speaker-transcribe が DB を使用中のため待機しています…`: 別の実行が声紋 DB を使い終わるのを待っているだけ。
+- `別の kikiwake が DB を使用中のため待機しています…`: 別の実行が声紋 DB を使い終わるのを待っているだけ。
   そのまま待つ（中断しない）。
 
 ### 3. 名前を尋ねて反映する
@@ -95,14 +95,14 @@ speaker-transcribe transcribe "<音声ファイルのパス>" --json
   複数人分をまとめて 1 回で渡せる。
 
 ```bash
-speaker-transcribe label "<session_path>" spk_2=田中 spk_3=佐藤 --json
-speaker-transcribe label "<session_path>" "spk_4=山田 太郎" --json   # 空白を含む名前は KEY=NAME ごと引用符で囲む
+kikiwake label "<session_path>" spk_2=田中 spk_3=佐藤 --json
+kikiwake label "<session_path>" "spk_4=山田 太郎" --json   # 空白を含む名前は KEY=NAME ごと引用符で囲む
 ```
 
 - `candidate` が合っていると言われたら、`？` を除いた名前で同じように `label` する（`spk_2=田中`）。違うと言われたら別の名前を尋ねる。
 - ユーザーが**わからないと言った話者には `label` しない**。そのまま `話者N` として残す。名前を推測で付けない。
 - 同じ人が 2 つの話者 ID に分かれていると分かったら、両方に同じ名前を付ける（自動的に統合される）。
-- 名前は「さん」などを付けず、ユーザーが言った表記で統一する。迷ったら先に `speaker-transcribe speakers list --json` で登録済みの名前を確認する。
+- 名前は「さん」などを付けず、ユーザーが言った表記で統一する。迷ったら先に `kikiwake speakers list --json` で登録済みの名前を確認する。
   名前は `？` / `?` で終われない。
 - `label` は標準エラーに `警告: ...` を出すことがある（声紋不足で DB に登録しなかった、など）。そのままユーザーに伝える。
 - `label` は `<stem>.md` を作り直す。`<stem>.voices.png` が既にあれば、それも作り直す。
@@ -118,10 +118,10 @@ speaker-transcribe label "<session_path>" "spk_4=山田 太郎" --json   # 空�
 ## 声紋 DB の管理
 
 ```bash
-speaker-transcribe speakers list [--json]          # 登録済みの人、サンプル数、最終更新日時
-speaker-transcribe speakers rename "旧名" "新名"          # 新名は label の名前と同じ規則（空・末尾の ？ / ? は不可）
-speaker-transcribe speakers delete "名前"           # その人の声紋をすべて削除
+kikiwake speakers list [--json]          # 登録済みの人、サンプル数、最終更新日時
+kikiwake speakers rename "旧名" "新名"          # 新名は label の名前と同じ規則（空・末尾の ？ / ? は不可）
+kikiwake speakers delete "名前"           # その人の声紋をすべて削除
 ```
 
-`rename` と `delete` はユーザーに頼まれたときだけ行う。DB は `~/.local/share/speaker-transcribe/db.json`
-（`SPEAKER_TRANSCRIBE_HOME` で変更可）。
+`rename` と `delete` はユーザーに頼まれたときだけ行う。DB は `~/.local/share/kikiwake/db.json`
+（`KIKIWAKE_HOME` で変更可）。

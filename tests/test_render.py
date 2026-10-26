@@ -3,7 +3,7 @@ from pathlib import Path
 
 from conftest import session_from_words
 
-from speaker_transcribe.render import (
+from kikiwake.render import (
     build_summary,
     format_ts,
     render_markdown,

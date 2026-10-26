@@ -3,8 +3,8 @@ import numpy as np
 from conftest import make_session, session_from_words, unit
 from matplotlib.colors import to_rgb
 
-from speaker_transcribe.audio import SAMPLE_RATE
-from speaker_transcribe.viz import _SPEAKER_COLORS, _draw_voiceprints, project_2d, render_viz, speaker_f0
+from kikiwake.audio import SAMPLE_RATE
+from kikiwake.viz import _SPEAKER_COLORS, _draw_voiceprints, project_2d, render_viz, speaker_f0
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 

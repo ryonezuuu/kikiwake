@@ -1,4 +1,4 @@
-"""The ``speaker-transcribe`` command: ``transcribe``, ``label``, ``speakers`` and ``viz``."""
+"""The ``kikiwake`` command: ``transcribe``, ``label``, ``speakers`` and ``viz``."""
 
 import argparse
 import json
@@ -10,17 +10,17 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from speaker_transcribe.audio import load_wav, require_ffmpeg, to_wav16k
-from speaker_transcribe.avalon import AvalonClient, get_api_key
-from speaker_transcribe.config import Settings, data_home, load_settings
-from speaker_transcribe.embedder import DIM, MODEL_ID, EcapaEmbedder, Embedder
-from speaker_transcribe.errors import AppError, UsageError
-from speaker_transcribe.labeling import apply_labels, clean_name
-from speaker_transcribe.pipeline import TranscribeOptions, Transcriber, check_audio, run_transcribe
-from speaker_transcribe.render import build_summary, render_markdown
-from speaker_transcribe.session import Session, load_session, save_session, session_paths
-from speaker_transcribe.speaker_db import SpeakerDB, atomic_write_text, locked
-from speaker_transcribe.viz import render_viz
+from kikiwake.audio import load_wav, require_ffmpeg, to_wav16k
+from kikiwake.avalon import AvalonClient, get_api_key
+from kikiwake.config import Settings, data_home, load_settings
+from kikiwake.embedder import DIM, MODEL_ID, EcapaEmbedder, Embedder
+from kikiwake.errors import AppError, UsageError
+from kikiwake.labeling import apply_labels, clean_name
+from kikiwake.pipeline import TranscribeOptions, Transcriber, check_audio, run_transcribe
+from kikiwake.render import build_summary, render_markdown
+from kikiwake.session import Session, load_session, save_session, session_paths
+from kikiwake.speaker_db import SpeakerDB, atomic_write_text, locked
+from kikiwake.viz import render_viz
 
 _MAX_SPEAKERS = 8
 
@@ -228,7 +228,7 @@ def _add_json(parser: argparse.ArgumentParser) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="speaker-transcribe",
+        prog="kikiwake",
         description="会議音声を文字起こしし、声紋 DB で話者に名前を付ける",
     )
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")

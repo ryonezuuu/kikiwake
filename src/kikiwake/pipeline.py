@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from speaker_transcribe.audio import (
+from kikiwake.audio import (
     load_wav,
     probe_duration,
     require_ffmpeg,
@@ -17,22 +17,22 @@ from speaker_transcribe.audio import (
     to_upload_mp3,
     to_wav16k,
 )
-from speaker_transcribe.config import Settings
-from speaker_transcribe.embedder import Embedder
-from speaker_transcribe.errors import AppError, UsageError
-from speaker_transcribe.labeling import apply_label
-from speaker_transcribe.matcher import assign, person_score, score_table
-from speaker_transcribe.models import parse_diarized
-from speaker_transcribe.render import render_markdown
-from speaker_transcribe.session import (
+from kikiwake.config import Settings
+from kikiwake.embedder import Embedder
+from kikiwake.errors import AppError, UsageError
+from kikiwake.labeling import apply_label
+from kikiwake.matcher import assign, person_score, score_table
+from kikiwake.models import parse_diarized
+from kikiwake.render import render_markdown
+from kikiwake.session import (
     Session,
     SpeakerState,
     load_session,
     save_session,
     session_paths,
 )
-from speaker_transcribe.speaker_db import Sample, SpeakerDB, atomic_write_text
-from speaker_transcribe.voiceprint import build_voiceprint
+from kikiwake.speaker_db import Sample, SpeakerDB, atomic_write_text
+from kikiwake.voiceprint import build_voiceprint
 
 _TOO_LONG = "録音が 4 時間を超えています（上限 4 時間）"
 _OPTIONS_IGNORED = (

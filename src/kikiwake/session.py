@@ -5,9 +5,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, cast, get_args
 
-from speaker_transcribe.errors import UsageError
-from speaker_transcribe.models import DiarizedTranscription, parse_diarized
-from speaker_transcribe.speaker_db import atomic_write_text
+from kikiwake.errors import UsageError
+from kikiwake.models import DiarizedTranscription, parse_diarized
+from kikiwake.speaker_db import atomic_write_text
 
 SESSION_VERSION = 1
 

@@ -11,14 +11,14 @@ import numpy as np
 import pytest
 from conftest import raw_diarized, unit
 
-from speaker_transcribe import cli
-from speaker_transcribe.audio import SAMPLE_RATE
-from speaker_transcribe.avalon import API_KEY_ENVS
-from speaker_transcribe.cli import main
-from speaker_transcribe.config import Settings
-from speaker_transcribe.errors import AppError, UsageError
-from speaker_transcribe.session import load_session
-from speaker_transcribe.speaker_db import SpeakerDB
+from kikiwake import cli
+from kikiwake.audio import SAMPLE_RATE
+from kikiwake.avalon import API_KEY_ENVS
+from kikiwake.cli import main
+from kikiwake.config import Settings
+from kikiwake.errors import AppError, UsageError
+from kikiwake.session import load_session
+from kikiwake.speaker_db import SpeakerDB
 
 real_make_transcriber = cli.make_transcriber
 ISO_SECONDS_WITH_OFFSET = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d")
@@ -85,7 +85,7 @@ class CliEnv:
 @pytest.fixture
 def cli_env(tmp_path, monkeypatch):
     env = CliEnv(tmp_path)
-    monkeypatch.setenv("SPEAKER_TRANSCRIBE_HOME", str(env.home))
+    monkeypatch.setenv("KIKIWAKE_HOME", str(env.home))
     monkeypatch.setattr(cli, "make_embedder", lambda home: FreqEmbedder())
     monkeypatch.setattr(cli, "make_transcriber", lambda settings: env.transcriber)
     return env
@@ -583,7 +583,7 @@ def test_argparse_errors_return_2_instead_of_exiting(cli_env, capsys):
 def test_help_returns_0(capsys):
     assert main(["--help"]) == 0
     out = capsys.readouterr().out
-    assert "speaker-transcribe" in out and "transcribe" in out and "speakers" in out
+    assert "kikiwake" in out and "transcribe" in out and "speakers" in out
     assert main(["transcribe", "--help"]) == 0
     assert "--max-speakers" in capsys.readouterr().out
 
@@ -591,7 +591,7 @@ def test_help_returns_0(capsys):
 def test_no_subcommand_prints_help_to_stderr_and_returns_2(capsys):
     assert main([]) == 2
     captured = capsys.readouterr()
-    assert captured.out == "" and "usage: speaker-transcribe" in captured.err
+    assert captured.out == "" and "usage: kikiwake" in captured.err
 
 
 def test_make_transcriber_asks_for_the_key_only_on_first_call(monkeypatch, tmp_path):

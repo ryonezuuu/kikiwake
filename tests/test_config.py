@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from speaker_transcribe.config import Settings, data_home, load_settings
-from speaker_transcribe.errors import AppError, UsageError
+from kikiwake.config import Settings, data_home, load_settings
+from kikiwake.errors import AppError, UsageError
 
 
 def test_defaults_match_spec():
@@ -14,11 +14,11 @@ def test_defaults_match_spec():
 
 
 def test_data_home_env_override(tmp_path):
-    assert data_home({"SPEAKER_TRANSCRIBE_HOME": str(tmp_path)}) == tmp_path
+    assert data_home({"KIKIWAKE_HOME": str(tmp_path)}) == tmp_path
 
 
 def test_data_home_default():
-    assert data_home({"HOME": "/Users/x"}) == Path("/Users/x/.local/share/speaker-transcribe")
+    assert data_home({"HOME": "/Users/x"}) == Path("/Users/x/.local/share/kikiwake")
 
 
 def test_load_settings_overrides(tmp_path):

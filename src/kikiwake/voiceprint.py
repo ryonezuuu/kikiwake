@@ -2,10 +2,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from speaker_transcribe.audio import cut
-from speaker_transcribe.config import Settings
-from speaker_transcribe.embedder import Embedder
-from speaker_transcribe.models import DiarizedTranscription
+from kikiwake.audio import cut
+from kikiwake.config import Settings
+from kikiwake.embedder import Embedder
+from kikiwake.models import DiarizedTranscription
 
 Segment = tuple[float, float]  # (start, end) in seconds
 

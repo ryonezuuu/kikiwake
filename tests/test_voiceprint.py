@@ -4,9 +4,9 @@ import numpy as np
 import pytest
 from conftest import FakeEmbedder, raw_diarized
 
-from speaker_transcribe.config import Settings
-from speaker_transcribe.models import parse_diarized
-from speaker_transcribe.voiceprint import build_voiceprint, select_segments, split_chunks
+from kikiwake.config import Settings
+from kikiwake.models import parse_diarized
+from kikiwake.voiceprint import build_voiceprint, select_segments, split_chunks
 
 S = Settings()
 

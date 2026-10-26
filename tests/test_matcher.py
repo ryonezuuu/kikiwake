@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from speaker_transcribe.config import Settings
-from speaker_transcribe.matcher import Match, assign, person_score, score_table
+from kikiwake.config import Settings
+from kikiwake.matcher import Match, assign, person_score, score_table
 
 DIM = 192
 

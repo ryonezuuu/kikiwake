@@ -4,8 +4,8 @@ import json
 import pytest
 from conftest import make_session, make_state
 
-from speaker_transcribe.errors import UsageError
-from speaker_transcribe.session import load_session, save_session, session_paths
+from kikiwake.errors import UsageError
+from kikiwake.session import load_session, save_session, session_paths
 
 
 def test_session_paths_keep_spaces_and_dots(tmp_path):

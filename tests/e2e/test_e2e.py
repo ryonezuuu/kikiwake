@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 from conftest import say_wav
 
-from speaker_transcribe.audio import SAMPLE_RATE
-from speaker_transcribe.cli import main
+from kikiwake.audio import SAMPLE_RATE
+from kikiwake.cli import main
 
 pytestmark = pytest.mark.e2e
 
@@ -95,7 +95,7 @@ def make_meeting_b(tmp_path: Path) -> Path:
 
 
 def test_names_carry_over_between_meetings(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("SPEAKER_TRANSCRIBE_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("KIKIWAKE_HOME", str(tmp_path / "home"))
     a, b = make_meeting_a(tmp_path), make_meeting_b(tmp_path)
 
     assert main(["transcribe", str(a), "--language", "ja", "--json"]) == 0

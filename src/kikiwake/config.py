@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
 
-from speaker_transcribe.errors import UsageError
+from kikiwake.errors import UsageError
 
 
 @dataclass(frozen=True)
@@ -31,10 +31,10 @@ class Settings:
 
 
 def data_home(env: Mapping[str, str] = os.environ) -> Path:
-    override = env.get("SPEAKER_TRANSCRIBE_HOME")
+    override = env.get("KIKIWAKE_HOME")
     if override:
         return Path(override)
-    return Path(env["HOME"]) / ".local/share/speaker-transcribe"
+    return Path(env["HOME"]) / ".local/share/kikiwake"
 
 
 def load_settings(home: Path) -> Settings:

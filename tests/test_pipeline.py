@@ -8,14 +8,14 @@ import numpy as np
 import pytest
 from conftest import raw_diarized, unit
 
-from speaker_transcribe import pipeline
-from speaker_transcribe.audio import SAMPLE_RATE, sha256_file
-from speaker_transcribe.config import Settings
-from speaker_transcribe.errors import AppError, UsageError
-from speaker_transcribe.labeling import apply_labels
-from speaker_transcribe.pipeline import TranscribeOptions, run_transcribe
-from speaker_transcribe.session import load_session, save_session
-from speaker_transcribe.speaker_db import SpeakerDB, locked
+from kikiwake import pipeline
+from kikiwake.audio import SAMPLE_RATE, sha256_file
+from kikiwake.config import Settings
+from kikiwake.errors import AppError, UsageError
+from kikiwake.labeling import apply_labels
+from kikiwake.pipeline import TranscribeOptions, run_transcribe
+from kikiwake.session import load_session, save_session
+from kikiwake.speaker_db import SpeakerDB, locked
 
 DURATION = 30.0
 # (speaker, first word start, end, tone frequency): clean speech, 0.5 s per word, no gaps or overlap.

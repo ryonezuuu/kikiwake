@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from speaker_transcribe.audio import SAMPLE_RATE, cut
-from speaker_transcribe.session import Session, SpeakerState
+from kikiwake.audio import SAMPLE_RATE, cut
+from kikiwake.session import Session, SpeakerState
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes

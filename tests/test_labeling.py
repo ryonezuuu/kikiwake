@@ -4,9 +4,9 @@ import numpy as np
 import pytest
 from conftest import make_session, unit
 
-from speaker_transcribe.errors import UsageError
-from speaker_transcribe.labeling import apply_label, apply_labels, resolve_key
-from speaker_transcribe.speaker_db import SpeakerDB
+from kikiwake.errors import UsageError
+from kikiwake.labeling import apply_label, apply_labels, resolve_key
+from kikiwake.speaker_db import SpeakerDB
 
 
 @pytest.fixture

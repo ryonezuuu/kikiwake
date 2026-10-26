@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Any, NoReturn
 
-from speaker_transcribe.errors import AppError
+from kikiwake.errors import AppError
 
 
 @dataclass(frozen=True)

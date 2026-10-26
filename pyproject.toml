@@ -1,5 +1,5 @@
 [project]
-name = "speaker-transcribe"
+name = "kikiwake"
 version = "0.1.0"
 description = "Transcribe meeting audio via the Avalon API and identify speakers with a local voiceprint DB"
 requires-python = ">=3.11,<3.14"
@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-speaker-transcribe = "speaker_transcribe.cli:main"
+kikiwake = "kikiwake.cli:main"
 
 [build-system]
 requires = ["hatchling"]

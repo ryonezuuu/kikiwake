@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from speaker_transcribe.audio import to_wav16k
-from speaker_transcribe.session import Session, SpeakerState
+from kikiwake.audio import to_wav16k
+from kikiwake.session import Session, SpeakerState
 
 
 def raw_diarized(

@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from speaker_transcribe.audio import (
+from kikiwake.audio import (
     SAMPLE_RATE,
     cut,
     load_wav,
@@ -18,7 +18,7 @@ from speaker_transcribe.audio import (
     to_upload_mp3,
     to_wav16k,
 )
-from speaker_transcribe.errors import AppError, UsageError
+from kikiwake.errors import AppError, UsageError
 
 
 def make_sine(path: Path, seconds: float) -> None:

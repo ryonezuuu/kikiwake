@@ -7,8 +7,8 @@ from pathlib import Path
 
 import httpx
 
-from speaker_transcribe.config import Settings
-from speaker_transcribe.errors import AppError, UsageError
+from kikiwake.config import Settings
+from kikiwake.errors import AppError, UsageError
 
 API_KEY_ENVS = ("AQUAVOICE_API", "AQUAVOICE_API_KEY", "AQUA_API_KEY")
 

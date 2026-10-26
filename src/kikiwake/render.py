@@ -3,8 +3,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from speaker_transcribe.models import Turn, Word
-from speaker_transcribe.session import Session
+from kikiwake.models import Turn, Word
+from kikiwake.session import Session
 
 _UNCONFIRMED = ("candidate", "unknown", "insufficient")
 _MAX_EXAMPLES = 3

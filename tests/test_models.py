@@ -1,8 +1,8 @@
 import pytest
 from conftest import raw_diarized
 
-from speaker_transcribe.errors import AppError
-from speaker_transcribe.models import Word, parse_diarized
+from kikiwake.errors import AppError
+from kikiwake.models import Word, parse_diarized
 
 
 def test_parse_orders_speakers_by_first_seen():
