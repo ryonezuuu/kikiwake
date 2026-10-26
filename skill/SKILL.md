@@ -34,6 +34,9 @@ speaker-transcribe transcribe "<音声ファイルのパス>" --json
 - 出力先は既定で音声と同じ場所（`<stem>.md` と `<stem>.session.json`）。変えるときは `--output-dir DIR`。
 - 同じ音声をもう一度処理すると保存済みの結果を再利用する（API は呼ばれない）。API から取り直すときだけ `--force-api`
   （話者 ID が変わり得るので、それまでの名前付けは破棄される）。
+- 保存済みの結果を再利用するときは `--language` / `--prompt` / `--max-speakers` は**反映されない**
+  （標準エラーに「保存済みの文字起こしを再利用するため … は反映されません（反映するには --force-api）」と出る）。
+  反映させたいときだけ `--force-api` を付ける（API の料金がもう一度かかるので、ユーザーに確認してから）。
 - 声の可視化画像（`<stem>.voices.png`）は、ユーザーが見たいと言ったときだけ `--viz` を付けて作る。あとから作るなら `speaker-transcribe viz "<session_path>"`。
 
 **終了コードが 2 のとき**（API キー未設定、ffmpeg 未導入、引数不正、声紋 DB のモデル不一致）は、標準エラーの

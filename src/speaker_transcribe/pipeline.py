@@ -35,6 +35,10 @@ from speaker_transcribe.speaker_db import Sample, SpeakerDB, atomic_write_text
 from speaker_transcribe.voiceprint import build_voiceprint
 
 _TOO_LONG = "録音が 4 時間を超えています（上限 4 時間）"
+_OPTIONS_IGNORED = (
+    "保存済みの文字起こしを再利用するため --language/--prompt/--max-speakers は反映されません"
+    "（反映するには --force-api）"
+)
 
 
 @dataclass
@@ -160,6 +164,8 @@ def run_transcribe(
         to_wav16k(audio, wav_path)
         if cached is not None:
             _progress("キャッシュを再利用します")
+            if (opts.language, opts.prompt, opts.max_speakers) != (None, None, None):
+                _progress(_OPTIONS_IGNORED)  # they only steer the API call
             raw = cached.avalon_response
         else:
             mp3_path = Path(tmp) / "upload.mp3"

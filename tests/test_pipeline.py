@@ -451,3 +451,31 @@ def test_paid_response_is_kept_when_a_later_step_fails(env, failure):
     assert env.calls == 1
     assert [s.display_label for s in session.speakers.values()] == ["話者1", "話者2"]
     assert md.read_text().startswith("# meeting.wav の文字起こし")
+
+
+OPTIONS_IGNORED = (
+    "保存済みの文字起こしを再利用するため --language/--prompt/--max-speakers は反映されません"
+    "（反映するには --force-api）\n"
+)
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        dict(language="ja"),
+        dict(prompt="固有名詞"),
+        dict(max_speakers=2),
+        dict(language="ja", prompt="固有名詞", max_speakers=2),
+    ],
+    ids=["language", "prompt", "max_speakers", "all"],
+)
+def test_cached_rerun_says_once_that_api_options_are_not_applied(env, capsys, options):
+    env.run(**options)
+    assert OPTIONS_IGNORED not in capsys.readouterr().err  # the API got them
+    env.run(**options)
+    assert capsys.readouterr().err.count(OPTIONS_IGNORED) == 1
+    env.run()
+    assert OPTIONS_IGNORED not in capsys.readouterr().err
+    env.run(force_api=True, **options)
+    assert OPTIONS_IGNORED not in capsys.readouterr().err
+    assert env.calls == 2
