@@ -1,0 +1,441 @@
+import copy
+import json
+import re
+import wave
+import warnings
+from pathlib import Path
+
+import numpy as np
+import pytest
+from conftest import raw_diarized, unit
+
+from speaker_transcribe import cli
+from speaker_transcribe.audio import SAMPLE_RATE
+from speaker_transcribe.avalon import API_KEY_ENVS
+from speaker_transcribe.cli import main
+from speaker_transcribe.config import Settings
+from speaker_transcribe.errors import UsageError
+from speaker_transcribe.session import load_session
+
+real_make_transcriber = cli.make_transcriber
+ISO_SECONDS_WITH_OFFSET = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d")
+
+DURATION = 30.0
+# (speaker, first word start, end, tone frequency): clean speech, 0.5 s per word, no gaps or overlap.
+REGIONS = [("spk_0", 0.0, 8.0, 150.0), ("spk_1", 10.0, 18.0, 250.0)]
+
+
+class FreqEmbedder:
+    """Embeds by pitch: a peak below 200 Hz is ``unit(0)``, otherwise ``unit(1)``."""
+
+    model_id = "fake"
+    dim = 4
+
+    def embed(self, wav: np.ndarray) -> np.ndarray:
+        peak = np.argmax(np.abs(np.fft.rfft(wav))) * SAMPLE_RATE / len(wav)
+        return unit(0 if peak < 200 else 1)
+
+
+def write_meeting(path: Path) -> None:
+    t = np.arange(round(DURATION * SAMPLE_RATE)) / SAMPLE_RATE
+    signal = np.zeros_like(t)
+    for _, start, end, freq in REGIONS:
+        inside = (t >= start) & (t < end)
+        signal[inside] = 0.3 * np.sin(2 * np.pi * freq * t[inside])
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(SAMPLE_RATE)
+        wf.writeframes((signal * 32767).astype("<i2").tobytes())
+
+
+def clean_words(speaker: str, start: float, end: float) -> list[tuple[str, float, float, float, bool]]:
+    count = round((end - start) / 0.5)
+    return [(speaker, start + 0.5 * i, start + 0.5 * (i + 1), 0.9, False) for i in range(count)]
+
+
+def meeting_response() -> dict:
+    words = [w for speaker, start, end, _ in REGIONS for w in clean_words(speaker, start, end)]
+    return raw_diarized(words, duration=DURATION)
+
+
+class CliEnv:
+    """A tmp data home plus ``meeting.wav``, with the embedder and the Avalon call replaced by fakes."""
+
+    def __init__(self, tmp_path):
+        self.tmp_path = tmp_path
+        self.home = tmp_path / "home"
+        self.audio = tmp_path / "meeting.wav"
+        write_meeting(self.audio)
+        self.session_path = self.audio.with_suffix(".session.json")
+        self.markdown_path = self.audio.with_suffix(".md")
+        self.png_path = self.audio.with_name("meeting.voices.png")
+        self.response = meeting_response()
+        self.calls = []  # the TranscribeOptions of every API call
+
+    def transcriber(self, mp3, opts):
+        assert mp3.suffix == ".mp3" and mp3.stat().st_size > 0
+        self.calls.append(opts)
+        return copy.deepcopy(self.response)
+
+
+@pytest.fixture
+def cli_env(tmp_path, monkeypatch):
+    env = CliEnv(tmp_path)
+    monkeypatch.setenv("SPEAKER_TRANSCRIBE_HOME", str(env.home))
+    monkeypatch.setattr(cli, "make_embedder", lambda home: FreqEmbedder())
+    monkeypatch.setattr(cli, "make_transcriber", lambda settings: env.transcriber)
+    return env
+
+
+def no_model(monkeypatch):
+    """Fail the test if a command loads the embedding model."""
+
+    def forbidden(home):
+        raise AssertionError("the embedding model must not be loaded")
+
+    monkeypatch.setattr(cli, "make_embedder", forbidden)
+
+
+def transcribe(cli_env, capsys, *extra) -> dict:
+    assert main(["transcribe", str(cli_env.audio), "--json", *extra]) == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def test_transcribe_json_then_label(cli_env, capsys):
+    assert main(["transcribe", str(cli_env.audio), "--json"]) == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert [s["label"] for s in summary["speakers"]] == ["話者1", "話者2"]
+    assert main(["label", summary["session_path"], "spk_0=田中", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["speakers"][0]["label"] == "田中"
+    assert "**[00:00:00] 田中**" in Path(summary["markdown_path"]).read_text()
+
+
+def test_label_bad_key_exit_2(cli_env, capsys):
+    main(["transcribe", str(cli_env.audio)])
+    capsys.readouterr()
+    assert main(["label", str(cli_env.session_path), "nope=田中"]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err.startswith("エラー: ") and "話者1" in captured.err
+
+
+def test_label_arg_without_equals(cli_env, capsys):
+    main(["transcribe", str(cli_env.audio)])
+    capsys.readouterr()
+    assert main(["label", str(cli_env.session_path), "田中"]) == 2
+    assert "田中" in capsys.readouterr().err
+
+
+def test_label_changes_nothing_when_one_pair_is_bad(cli_env, capsys):
+    main(["transcribe", str(cli_env.audio)])
+    before = cli_env.session_path.read_text(encoding="utf-8")
+    assert main(["label", str(cli_env.session_path), "spk_0=田中", "nope=鈴木"]) == 2
+    assert cli_env.session_path.read_text(encoding="utf-8") == before
+    assert "田中" not in (cli_env.home / "db.json").read_text(encoding="utf-8")
+
+
+def test_missing_api_key_exit_2(cli_env, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "make_transcriber", real_make_transcriber)
+    for k in API_KEY_ENVS:
+        monkeypatch.delenv(k, raising=False)
+    assert main(["transcribe", str(cli_env.audio)]) == 2
+    captured = capsys.readouterr()
+    assert "AQUAVOICE_API" in captured.err and captured.out == ""
+    assert not cli_env.session_path.exists()
+
+
+def test_cached_rerun_needs_no_api_key(cli_env, monkeypatch, capsys):
+    main(["transcribe", str(cli_env.audio)])
+    monkeypatch.setattr(cli, "make_transcriber", real_make_transcriber)
+    for k in API_KEY_ENVS:
+        monkeypatch.delenv(k, raising=False)
+    assert main(["transcribe", str(cli_env.audio)]) == 0
+    assert len(cli_env.calls) == 1
+
+
+def test_speakers_list_rename_delete(cli_env, capsys):
+    main(["transcribe", str(cli_env.audio)])
+    main(["label", str(cli_env.session_path), "spk_0=田中"])
+    capsys.readouterr()
+    assert main(["speakers", "list", "--json"]) == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert [(p["name"], p["samples"]) for p in listed] == [("田中", 1)]
+    assert ISO_SECONDS_WITH_OFFSET.fullmatch(listed[0]["updated_at"])
+    assert main(["speakers", "rename", "田中", "鈴木"]) == 0
+    assert capsys.readouterr().out == ""
+    assert main(["speakers", "list", "--json"]) == 0
+    assert [p["name"] for p in json.loads(capsys.readouterr().out)] == ["鈴木"]
+    assert main(["speakers", "delete", "佐藤"]) == 2
+    assert "佐藤" in capsys.readouterr().err
+    assert main(["speakers", "delete", "鈴木"]) == 0
+    assert capsys.readouterr().out == ""
+    assert main(["speakers", "list", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == []
+
+
+def test_speakers_list_human_format(cli_env, capsys):
+    main(["transcribe", str(cli_env.audio)])
+    main(["label", str(cli_env.session_path), "spk_0=田中", "spk_1=鈴木"])
+    capsys.readouterr()
+    assert main(["speakers", "list"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 2
+    assert re.fullmatch(r"田中  サンプル 1 件  最終更新 \S+", lines[0])
+    assert ISO_SECONDS_WITH_OFFSET.fullmatch(lines[0].rsplit(" ", 1)[1])
+    assert lines[1].startswith("鈴木  サンプル 1 件  最終更新 ")
+
+
+def test_speakers_list_of_empty_db_prints_nothing(cli_env, capsys):
+    assert main(["speakers", "list"]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_speakers_rename_to_existing_name_exit_2(cli_env, capsys):
+    main(["transcribe", str(cli_env.audio)])
+    main(["label", str(cli_env.session_path), "spk_0=田中", "spk_1=鈴木"])
+    capsys.readouterr()
+    assert main(["speakers", "rename", "田中", "鈴木"]) == 2
+    assert "鈴木" in capsys.readouterr().err
+
+
+def test_json_stdout_is_pure_json(cli_env, capsys):
+    main(["transcribe", str(cli_env.audio), "--json"])
+    captured = capsys.readouterr()
+    json.loads(captured.out)  # 進捗ログが混ざっていないこと
+    assert captured.out.endswith("}\n") and "文字起こし中" in captured.err
+    assert "田中" not in captured.out and "話者1" in captured.out  # ensure_ascii=False
+
+
+def test_human_output_is_the_markdown_path_only(cli_env, capsys):
+    assert main(["transcribe", str(cli_env.audio)]) == 0
+    assert capsys.readouterr().out == f"{cli_env.markdown_path}\n"
+    assert cli_env.markdown_path.read_text().startswith("# meeting.wav の文字起こし")
+    assert main(["label", str(cli_env.session_path), "spk_0=田中"]) == 0
+    assert capsys.readouterr().out == f"{cli_env.markdown_path}\n"
+
+
+def test_viz_flag_writes_png(cli_env):
+    assert main(["transcribe", str(cli_env.audio), "--viz"]) == 0
+    assert cli_env.audio.with_name("meeting.voices.png").exists()
+
+
+def test_viz_path_in_summary_follows_the_png(cli_env, capsys):
+    assert transcribe(cli_env, capsys)["viz_path"] is None
+    summary = transcribe(cli_env, capsys, "--viz")
+    assert summary["viz_path"] == str(cli_env.png_path)
+    assert transcribe(cli_env, capsys)["viz_path"] == str(cli_env.png_path)  # still there
+
+
+def test_transcribe_passes_options_and_cached_rerun_skips_api(cli_env, tmp_path, capsys):
+    out_dir = tmp_path / "out"
+    summary = transcribe(
+        cli_env, capsys, "--output-dir", str(out_dir), "--language", "ja",
+        "--prompt", "固有名詞", "--max-speakers", "3",
+    )  # fmt: skip
+    (opts,) = cli_env.calls
+    assert (opts.language, opts.prompt, opts.max_speakers) == ("ja", "固有名詞", 3)
+    assert (opts.output_dir, opts.force_api) == (out_dir, False)
+    assert summary["markdown_path"] == str(out_dir / "meeting.md")
+    assert summary["session_path"] == str(out_dir / "meeting.session.json")
+    assert not cli_env.session_path.exists()
+
+    transcribe(cli_env, capsys, "--output-dir", str(out_dir))
+    assert len(cli_env.calls) == 1
+    transcribe(cli_env, capsys, "--output-dir", str(out_dir), "--force-api")
+    assert len(cli_env.calls) == 2 and cli_env.calls[1].force_api is True
+
+
+def test_relative_paths_are_stored_absolute(cli_env, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert main(["transcribe", "meeting.wav", "--output-dir", "out", "--json"]) == 0
+    summary = json.loads(capsys.readouterr().out)
+    session_path = tmp_path / "out" / "meeting.session.json"
+    assert summary["session_path"] == str(session_path)
+    assert load_session(session_path).audio_path == str(cli_env.audio)
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    assert main(["viz", "../out/meeting.session.json"]) == 0  # finds the audio from any cwd
+    assert capsys.readouterr().out == f"{tmp_path / 'out' / 'meeting.voices.png'}\n"
+
+
+def test_home_is_expanded_in_paths(cli_env, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert main(["transcribe", "~/meeting.wav", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["markdown_path"] == str(cli_env.markdown_path)
+
+
+def test_session_created_at_is_local_iso8601_in_seconds(cli_env):
+    main(["transcribe", str(cli_env.audio)])
+    assert ISO_SECONDS_WITH_OFFSET.fullmatch(load_session(cli_env.session_path).created_at)
+
+
+def test_viz_command(cli_env, monkeypatch, capsys):
+    main(["transcribe", str(cli_env.audio)])
+    capsys.readouterr()
+    no_model(monkeypatch)
+    assert main(["viz", str(cli_env.session_path)]) == 0
+    assert capsys.readouterr().out == f"{cli_env.png_path}\n"
+    assert cli_env.png_path.read_bytes().startswith(b"\x89PNG")
+    assert main(["viz", str(cli_env.session_path), "--json"]) == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["viz_path"] == str(cli_env.png_path)
+    assert summary["session_path"] == str(cli_env.session_path)
+
+
+def test_viz_without_the_original_audio_exit_1(cli_env, capsys):
+    main(["transcribe", str(cli_env.audio)])
+    capsys.readouterr()
+    cli_env.audio.unlink()
+    assert main(["viz", str(cli_env.session_path)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == f"エラー: 元の音声ファイルが見つかりません: {cli_env.audio}\n"
+    assert not cli_env.png_path.exists()
+
+
+def test_label_regenerates_png_only_when_it_exists(cli_env, monkeypatch, capsys):
+    main(["transcribe", str(cli_env.audio)])
+    capsys.readouterr()
+    no_model(monkeypatch)
+    assert main(["label", str(cli_env.session_path), "spk_0=田中", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["viz_path"] is None
+    assert not cli_env.png_path.exists()
+
+    cli_env.png_path.write_bytes(b"stale")
+    assert main(["label", str(cli_env.session_path), "spk_1=鈴木", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["viz_path"] == str(cli_env.png_path)
+    assert cli_env.png_path.read_bytes().startswith(b"\x89PNG")
+
+
+def test_label_warning_goes_to_stderr(cli_env, capsys):
+    words = clean_words("spk_0", 0.0, 8.0) + clean_words("spk_1", 10.0, 11.5)
+    cli_env.response = raw_diarized(words, duration=DURATION)
+    main(["transcribe", str(cli_env.audio)])
+    capsys.readouterr()
+    assert main(["label", str(cli_env.session_path), "spk_1=佐藤"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == f"{cli_env.markdown_path}\n"
+    assert "佐藤 は声紋が不足しているため、DB には登録しません" in captured.err
+    assert "**[00:00:10] 佐藤**" in cli_env.markdown_path.read_text()
+
+
+def test_label_with_missing_session_exit_2(cli_env, capsys):
+    assert main(["label", str(cli_env.session_path), "spk_0=田中"]) == 2
+    assert "セッションを読み込めません" in capsys.readouterr().err
+
+
+def test_label_writes_next_to_the_session_file(cli_env, tmp_path, capsys):
+    out_dir = tmp_path / "out"
+    summary = transcribe(cli_env, capsys, "--output-dir", str(out_dir))
+    assert main(["label", summary["session_path"], "spk_0=田中"]) == 0
+    assert "**[00:00:00] 田中**" in (out_dir / "meeting.md").read_text()
+    assert not cli_env.markdown_path.exists()
+
+
+def test_commands_other_than_transcribe_do_not_load_the_model(cli_env, monkeypatch, capsys):
+    main(["transcribe", str(cli_env.audio)])
+    no_model(monkeypatch)
+    assert main(["label", str(cli_env.session_path), "spk_0=田中"]) == 0
+    assert main(["speakers", "list"]) == 0
+    assert main(["speakers", "rename", "田中", "鈴木"]) == 0
+    assert main(["speakers", "delete", "鈴木"]) == 0
+    assert main(["viz", str(cli_env.session_path)]) == 0
+
+
+def test_missing_audio_exit_2(cli_env, tmp_path, capsys):
+    assert main(["transcribe", str(tmp_path / "nope.wav")]) == 2
+    assert "音声ファイルが見つかりません" in capsys.readouterr().err
+
+
+def test_broken_config_exit_2(cli_env, capsys):
+    cli_env.home.mkdir()
+    (cli_env.home / "config.toml").write_text("auto_threshold = 'high'", encoding="utf-8")
+    assert main(["speakers", "list"]) == 2
+    assert "auto_threshold" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", ["0", "9", "-1", "many"])
+def test_max_speakers_must_be_1_to_8(cli_env, capsys, value):
+    assert main(["transcribe", str(cli_env.audio), "--max-speakers", value]) == 2
+    assert "--max-speakers" in capsys.readouterr().err
+    assert cli_env.calls == []
+
+
+@pytest.mark.parametrize("value", ["1", "8"])
+def test_max_speakers_bounds_are_accepted(cli_env, value):
+    assert main(["transcribe", str(cli_env.audio), "--max-speakers", value]) == 0
+    assert cli_env.calls[0].max_speakers == int(value)
+
+
+def test_argparse_errors_return_2_instead_of_exiting(cli_env, capsys):
+    assert main(["transcribe"]) == 2
+    assert "AUDIO" in capsys.readouterr().err
+    assert main(["bogus"]) == 2
+    assert main(["speakers"]) == 2
+    assert main(["label", str(cli_env.session_path)]) == 2
+
+
+def test_help_returns_0(capsys):
+    assert main(["--help"]) == 0
+    out = capsys.readouterr().out
+    assert "speaker-transcribe" in out and "transcribe" in out and "speakers" in out
+    assert main(["transcribe", "--help"]) == 0
+    assert "--max-speakers" in capsys.readouterr().out
+
+
+def test_no_subcommand_prints_help_to_stderr_and_returns_2(capsys):
+    assert main([]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == "" and "usage: speaker-transcribe" in captured.err
+
+
+def test_make_transcriber_asks_for_the_key_only_on_first_call(monkeypatch, tmp_path):
+    built = []
+    calls = []
+
+    class FakeClient:
+        def __init__(self, key, settings):
+            built.append((key, settings))
+
+        def transcribe(self, mp3, **kwargs):
+            calls.append((mp3, kwargs))
+            return {"ok": len(calls)}
+
+    for k in API_KEY_ENVS:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(cli, "AvalonClient", FakeClient)
+    settings = Settings()
+    transcriber = cli.make_transcriber(settings)  # no key needed yet
+    assert built == []
+    opts = cli.TranscribeOptions(language="ja", prompt="p", max_speakers=2)
+    with pytest.raises(UsageError, match="AQUAVOICE_API"):
+        transcriber(tmp_path / "a.mp3", opts)
+    assert built == []
+
+    monkeypatch.setenv("AQUA_API_KEY", "secret")
+    assert transcriber(tmp_path / "a.mp3", opts) == {"ok": 1}
+    assert transcriber(tmp_path / "b.mp3", opts) == {"ok": 2}
+    assert built == [("secret", settings)]  # one client for every call
+    assert calls[0] == (tmp_path / "a.mp3", {"language": "ja", "prompt": "p", "max_speakers": 2})
+
+
+class _NoisyEmbedder:
+    def __init__(self, savedir, message):
+        self.savedir = savedir
+        warnings.warn(message, UserWarning, stacklevel=2)
+
+
+def test_make_embedder_hides_only_the_speechbrain_symlink_warning(monkeypatch, tmp_path):
+    symlink = "The `local_dir_use_symlinks` argument is deprecated and ignored in `hf_hub_download`."
+    monkeypatch.setattr(cli, "EcapaEmbedder", lambda savedir: _NoisyEmbedder(savedir, symlink))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert cli.make_embedder(tmp_path).savedir == tmp_path / "models"
+
+    monkeypatch.setattr(cli, "EcapaEmbedder", lambda savedir: _NoisyEmbedder(savedir, "something else"))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(UserWarning, match="something else"):
+            cli.make_embedder(tmp_path)
