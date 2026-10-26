@@ -145,6 +145,7 @@ Cowork で 2 時間を超える録音が途中で失敗したら、VM のメモ�
   "markdown_path": "…/records/meeting/meeting.md",
   "session_path": "…/records/meeting/meeting.session.json",
   "viz_path": null,
+  "recorded_at": "2026-10-26T10:20:27+09:00",
   "speakers": [
     {"id": "spk_0", "label": "田中", "status": "auto", "score": 0.72},
     {"id": "spk_2", "label": "田中？", "status": "candidate", "score": 0.51,
@@ -155,6 +156,8 @@ Cowork で 2 時間を超える録音が途中で失敗したら、VM のメモ�
   "warnings": []
 }
 ```
+
+`recorded_at` は録音日時（ボイスメモの名前の日時、無ければ録音ファイルの更新日時。古い記録では `null` のことがある）。
 
 `status` の意味:
 
@@ -224,9 +227,9 @@ kikiwake label "<session_path>" "spk_4=田中 太郎" --json   # 空白を含む
 - 田中: …
 ```
 
-- 見出しの日時は、`session_path` の JSON にある `recorded_at`（録音日時）から取る。
-  `grep -m1 '"recorded_at"' "<session_path>"` で 1 行だけ読める（`2026-10-26T10:20:27+09:00` なら `2026-10-26 10:20`）。
-  値が `null` や無いときは `created_at` を使う。
+- 見出しの日時は、`transcribe` / `label` が出した JSON の `recorded_at`（録音日時）から取る
+  （`2026-10-26T10:20:27+09:00` なら `2026-10-26 10:20`）。
+  `null` のときだけ、`session_path` のファイルの `created_at` を使う（`grep -m1 '"created_at"' "<session_path>"` で 1 行だけ読める）。
 - `要点:` の行は 1 行だけ。`index.md` には**この行の先頭 60 文字**が載るので、いちばん大事なことを先頭に書く。
 - **推測で事実を足さない。** 文字起こしに無いこと、聞き取れなかったことは書かない。
   決まったこと・宿題が無ければ、その見出しの下に `- なし` と書く。

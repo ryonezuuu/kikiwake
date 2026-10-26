@@ -110,8 +110,11 @@ def test_transcribe_json_then_label(cli_env, capsys):
     assert main(["transcribe", str(cli_env.audio), "--json"]) == 0
     summary = json.loads(capsys.readouterr().out)
     assert [s["label"] for s in summary["speakers"]] == ["話者1", "話者2"]
+    recorded_at = load_session(cli_env.session_path).recorded_at
+    assert ISO_SECONDS_WITH_OFFSET.fullmatch(recorded_at) and summary["recorded_at"] == recorded_at
     assert main(["label", summary["session_path"], "spk_0=田中", "--json"]) == 0
-    assert json.loads(capsys.readouterr().out)["speakers"][0]["label"] == "田中"
+    labelled = json.loads(capsys.readouterr().out)
+    assert labelled["speakers"][0]["label"] == "田中" and labelled["recorded_at"] == recorded_at
     assert "**[00:00:00] 田中**" in Path(summary["markdown_path"]).read_text()
 
 

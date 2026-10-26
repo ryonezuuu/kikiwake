@@ -225,16 +225,19 @@ def test_summary_examples():
     assert unknown["label"] == "話者2" and unknown["examples"][0]["time"] == "00:00:45"
     assert "examples" not in next(x for x in sm["speakers"] if x["id"] == "spk_0")
     assert sm["viz_path"] is None and sm["markdown_path"] == "m.md"
+    assert sm["recorded_at"] is None  # an old session without it
 
 
 def test_summary_shape():
     s = _summary_session()
     s.warnings = [{"code": "labels_discarded"}]
+    s.recorded_at = "2026-10-26T10:20:27+09:00"
     sm = build_summary(s, Path("out/m.md"), Path("out/m.session.json"), Path("out/m.voices.png"))
     assert sm == {
         "markdown_path": "out/m.md",
         "session_path": "out/m.session.json",
         "viz_path": "out/m.voices.png",
+        "recorded_at": "2026-10-26T10:20:27+09:00",
         "speakers": [
             {"id": "spk_0", "label": "田中", "status": "auto", "score": 0.72},
             {

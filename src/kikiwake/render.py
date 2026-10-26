@@ -102,7 +102,7 @@ def _examples(turns: tuple[Turn, ...], speaker_id: str) -> list[dict[str, str]]:
 def build_summary(
     session: Session, markdown_path: Path, session_path: Path, viz_path: Path | None
 ) -> dict:
-    """The ``--json`` payload for an AI agent: output paths, each speaker, and the warnings."""
+    """The ``--json`` payload for an AI agent: output paths, ``recorded_at``, each speaker, the warnings."""
     turns = session.transcription.turns
     speakers = []
     for sid, st in session.speakers.items():
@@ -114,6 +114,7 @@ def build_summary(
         "markdown_path": str(markdown_path),
         "session_path": str(session_path),
         "viz_path": None if viz_path is None else str(viz_path),
+        "recorded_at": session.recorded_at,  # None in sessions saved before it was kept
         "speakers": speakers,
         "warnings": warning_messages(session),
     }
