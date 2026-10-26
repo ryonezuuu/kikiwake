@@ -1,0 +1,35 @@
+[project]
+name = "speaker-transcribe"
+version = "0.1.0"
+description = "Transcribe meeting audio via the Avalon API and identify speakers with a local voiceprint DB"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "httpx>=0.28.1",
+    "librosa>=0.11.0",
+    "matplotlib>=3.11.2",
+    "numpy>=2.4.6",
+    "scipy>=1.17.1",
+    "speechbrain>=1.1.2",
+    "torch>=2.14.1",
+    "torchaudio>=2.11.0",
+]
+
+[project.scripts]
+speaker-transcribe = "speaker_transcribe.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+addopts = '-m "not model and not e2e"'
+markers = [
+    "model: downloads the real embedding model",
+    "e2e: calls the real Avalon API",
+]
+pythonpath = ["src"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
