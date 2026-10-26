@@ -1,5 +1,7 @@
 from collections.abc import Sequence
 
+import numpy as np
+
 
 def raw_diarized(
     words: list[tuple[str, float, float, float, bool]],
@@ -50,3 +52,14 @@ def raw_diarized(
         "warnings": list(warnings),
         "usage": {"type": "duration", "seconds": duration},
     }
+
+
+class FakeEmbedder:
+    """Deterministic stand-in for a speaker embedder: depends only on the mean of the waveform."""
+
+    model_id = "fake"
+    dim = 4
+
+    def embed(self, wave: np.ndarray) -> np.ndarray:
+        vec = np.array([wave.mean(), 1.0, 0.0, 0.0], dtype=np.float32)
+        return vec / np.linalg.norm(vec)
