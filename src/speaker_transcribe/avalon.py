@@ -62,6 +62,7 @@ class AvalonClient:
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
+        self._api_key = api_key
         self._headers = {"Authorization": f"Bearer {api_key}"}
         self._settings = settings
         # Uploads can be ~100 MB, so allow a long write phase.
@@ -92,6 +93,10 @@ class AvalonClient:
 
         job_id, status = self._submit(audio_path, fields, str(uuid.uuid4()))
         return self._wait_for_result(job_id, status)
+
+    def _redact(self, text: str) -> str:
+        """``text`` from the server, with the API key masked in case the server echoed it."""
+        return text.replace(self._api_key, "***") if self._api_key else text
 
     def _url(self, path: str) -> str:
         return self._settings.base_url.rstrip("/") + path
@@ -140,9 +145,10 @@ class AvalonClient:
                 _log(f"ジョブ {job_id}: {status}")
 
             if status in _FAILED_STATUSES:
+                error_code = self._redact(str(job.get("error_code") or "(なし)"))
                 raise AppError(
                     f"Avalon ジョブ {job_id} が完了しませんでした: "
-                    f"status={status}, error_code={job.get('error_code') or '(なし)'}"
+                    f"status={status}, error_code={error_code}"
                 )
             if status == "succeeded":
                 response = self._request(
@@ -171,9 +177,9 @@ class AvalonClient:
                 if 200 <= status < 300 or status in accept:
                     return response
                 if status != 429 and status < 500:
-                    raise AppError(
-                        f"Avalon API エラー HTTP {status}: {response.text[:_ERROR_BODY_CHARS]}"
-                    )
+                    # Masked before the cut, so no part of the key can be left at the end.
+                    body = self._redact(response.text)[:_ERROR_BODY_CHARS]
+                    raise AppError(f"Avalon API エラー HTTP {status}: {body}")
                 failure = f"HTTP {status}"
             if attempt < max_retries:
                 wait = 2 ** (attempt + 1)

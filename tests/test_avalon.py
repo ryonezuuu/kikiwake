@@ -251,6 +251,23 @@ def test_4xx_not_retried(audio, clock):
     assert KEY not in message
 
 
+def test_4xx_message_never_shows_the_api_key(audio, clock):
+    body = f'{{"error": {{"message": "invalid api key: {KEY}"}}}}'
+    assert body.index(KEY) == 40
+    api = FakeApi(post=[reply(401, text="x" * 255 + body)])  # the key straddles the 300-char cut
+    with pytest.raises(AppError) as excinfo:
+        make_client(api, clock).transcribe(audio)
+    message = str(excinfo.value)
+    assert KEY[:5] not in message and "***" in message
+
+
+def test_failed_job_error_code_never_shows_the_api_key(audio, clock):
+    api = FakeApi(post=[job("queued")], status=[job("failed", error_code=f"bad_key_{KEY}")])
+    with pytest.raises(AppError) as excinfo:
+        make_client(api, clock).transcribe(audio)
+    assert KEY not in str(excinfo.value) and "bad_key_***" in str(excinfo.value)
+
+
 def test_4xx_message_truncates_body_to_300_chars(audio, clock):
     api = FakeApi(post=[reply(400, text="x" * 1000)])
     with pytest.raises(AppError) as excinfo:
