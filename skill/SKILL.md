@@ -26,9 +26,15 @@ description: 会議・打ち合わせの音声ファイルを、話者名付き�
 - どちらでもない（`kikiwake` が無い）とき、Mac の Claude Code なら、リポジトリのルートで `uv tool install .` を実行する。
   リポジトリのルートは、このスキルのシンボリックリンク先の親ディレクトリ（`dirname "$(readlink ~/.claude/skills/kikiwake)"`）。
   コードを変更したあとは `uv tool install --reinstall .` で入れ直す。`ffmpeg` / `ffprobe` が必要（無ければ `brew install ffmpeg`）。
+  このスキルにあるコマンドが無いと言われる（例: `kikiwake index` で `invalid choice`）ときも、入っている版が古いので同じく入れ直す。
 - Mac モードでは、`echo "$KIKIWAKE_HOME"` が `$HOME/Documents/kikiwake/.kikiwake` でなければ、
   声紋 DB が Cowork と別になってしまう。`~/.zshrc` に
   `export KIKIWAKE_HOME="$HOME/Documents/kikiwake/.kikiwake"` を追加するようユーザーに案内する（勝手に書き換えない）。
+  - 設定のあと、`~/.local/share/kikiwake/db.json` があるのに `$HOME/Documents/kikiwake/.kikiwake/db.json` が無ければ、
+    新しい声紋 DB は空から始まる（これまでの人に名前が付かない）。README の「インストール」の 2 にあるコピーの手順を案内する
+    （頼まれたら代わりにコピーしてよい。上書きしない・元は消さない）。`kikiwake speakers list` に登録済みの人が並べば移行できている。
+  - 設定前から開いている Claude Code のシェルには `KIKIWAKE_HOME` や `AQUAVOICE_API` が渡っていないことがある。
+    `zsh -i -c '…'` で実行するか、Claude Code を開き直してもらう。
 - シェルで記録フォルダを使うときは `"$HOME/mnt/kikiwake/records/…"` のように **`$HOME` を使う**（引用符の中の `~` は展開されない）。
 
 ## 1. 準備
