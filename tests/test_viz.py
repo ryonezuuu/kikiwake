@@ -1,8 +1,10 @@
+import matplotlib
 import numpy as np
 from conftest import make_session, session_from_words, unit
+from matplotlib.colors import to_rgb
 
 from speaker_transcribe.audio import SAMPLE_RATE
-from speaker_transcribe.viz import project_2d, render_viz, speaker_f0
+from speaker_transcribe.viz import _SPEAKER_COLORS, _draw_voiceprints, project_2d, render_viz, speaker_f0
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
@@ -110,3 +112,30 @@ def test_project_2d_leaves_no_noise_in_directions_without_variance():
 def test_project_2d_puts_identical_points_at_the_origin():
     coords = project_2d(np.stack([unit(0), unit(0)]))
     assert np.array_equal(coords, np.zeros((2, 2)))
+
+
+def test_voiceprint_map_colours_db_people_by_identity():
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    session = make_session(
+        spk_0=dict(status="auto", name="田中"),
+        spk_1=dict(status="candidate", name="佐藤"),  # a guess: drawn as 佐藤？, so no shared colour
+    )
+    speakers = list(session.speakers.values())
+    colors = list(_SPEAKER_COLORS[:3])
+    people = {"佐藤": [unit(1)], "鈴木": [unit(3)], "田中": [unit(0), unit(0)]}
+    fig, ax = plt.subplots()
+    try:
+        _draw_voiceprints(ax, speakers, colors, people)
+        dots = {c.get_label(): c for c in ax.collections if c.get_label() in people}
+    finally:
+        plt.close(fig)
+
+    def rgb(name):
+        return tuple(dots[name].get_facecolor()[0][:3])
+
+    assert rgb("田中") == to_rgb(colors[0])  # the same person as the 田中 star
+    speaker_rgbs = {to_rgb(c) for c in _SPEAKER_COLORS}
+    assert rgb("佐藤") not in speaker_rgbs and rgb("鈴木") not in speaker_rgbs
+    assert all(d.get_alpha() < 1 for d in dots.values())

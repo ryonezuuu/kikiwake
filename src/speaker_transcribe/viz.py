@@ -1,6 +1,7 @@
 """Voice visualisation (``<stem>.voices.png``): pitch, long-term average spectrum and a voiceprint map."""
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
+from itertools import cycle
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -31,10 +32,12 @@ _RANK_TOLERANCE = 1e-9  # a principal component this much weaker than the first 
 _SPEAKER_COLORS = (
     "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948",
 )  # fmt: skip
-_PERSON_COLORS = (
-    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
-    "#bcbd22", "#17becf",
+# DB people who are not one of the speakers: muted greys, so no colour suggests a false match.
+_OTHER_PERSON_COLORS = (
+    "#7f7f7f", "#a8a8a8", "#565656", "#9c8f80", "#808f9c", "#8f9c80", "#c4c4c4", "#3f3f3f",
 )  # fmt: skip
+_DB_DOT_SIZE = 36  # a little larger than before, and see-through, so the dots show around the stars
+_DB_DOT_ALPHA = 0.5
 
 
 def speaker_f0(wave: np.ndarray, segments: Sequence[Segment]) -> np.ndarray:
@@ -132,6 +135,15 @@ def _draw_spectrum(ax: "Axes", speakers: list[SpeakerState], colors: list[str], 
     ax.legend()
 
 
+def _person_colors(names: Iterable[str], speakers: list[SpeakerState], colors: list[str]) -> dict[str, str]:
+    """A colour per DB person: the colour of the speaker shown under their name, else a muted grey."""
+    shown: dict[str, str] = {}
+    for st, color in zip(speakers, colors, strict=True):
+        shown.setdefault(st.display_label, color)  # merged speakers: the first one's colour
+    others = cycle(_OTHER_PERSON_COLORS)
+    return {name: shown[name] if name in shown else next(others) for name in names}
+
+
 def _draw_voiceprints(
     ax: "Axes",
     speakers: list[SpeakerState],
@@ -147,14 +159,15 @@ def _draw_voiceprints(
 
     coords = project_2d(np.stack(centroids + samples))
     speaker_xy, sample_xy = coords[: len(centroids)], coords[len(centroids) :]
+    person_colors = _person_colors(people, speakers, colors)
     first = 0
-    for i, (name, per_person) in enumerate(people.items()):
+    for name, per_person in people.items():
         mine = sample_xy[first : first + len(per_person)]
         first += len(per_person)
         if len(mine):
             ax.scatter(
-                mine[:, 0], mine[:, 1], s=18, alpha=0.65,
-                color=_PERSON_COLORS[i % len(_PERSON_COLORS)], label=name,
+                mine[:, 0], mine[:, 1], s=_DB_DOT_SIZE, alpha=_DB_DOT_ALPHA,
+                color=person_colors[name], label=name,
             )  # fmt: skip
     for st, color, (x, y) in zip(speakers, colors, speaker_xy, strict=True):
         ax.scatter(x, y, marker="*", s=300, color=color, edgecolors="black", linewidths=0.8, zorder=3)
