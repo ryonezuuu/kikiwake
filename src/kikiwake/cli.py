@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 import warnings
@@ -12,7 +13,7 @@ from functools import partial
 from pathlib import Path
 
 from kikiwake.archive import write_index
-from kikiwake.audio import load_wav, require_ffmpeg, to_wav16k
+from kikiwake.audio import load_wav, require_ffmpeg, sha256_file, to_wav16k
 from kikiwake.avalon import API_KEY_FILENAME, AvalonClient, get_api_key
 from kikiwake.config import Settings, data_home, load_settings, local_zone
 from kikiwake.embedder import DIM, MODEL_ID, EcapaEmbedder, Embedder
@@ -85,11 +86,42 @@ def _print_json(data: object) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
 
-def _write_viz(session: Session, db: SpeakerDB, png_path: Path) -> None:
-    """Draw the voice picture of ``session`` from its original audio."""
+_NOT_SEARCHED = ("records", ".kikiwake")  # meeting folders and KIKIWAKE_HOME hold no recordings
+
+
+def _records_root(folder: Path) -> Path | None:
+    """``<root>`` if ``folder`` is a meeting folder ``<root>/records/<x>`` of a records folder."""
+    return folder.parent.parent if folder.parent.name == "records" else None
+
+
+def _find_audio(session: Session, session_path: Path) -> Path | None:
+    """The recording of ``session``, or ``None`` if it cannot be found.
+
+    The stored ``audio_path`` is where it was when transcribed (in Cowork, a path in that
+    conversation's VM). If it is not there and the session is in ``<root>/records/<x>/``, the first
+    file under ``<root>`` (not in ``records/`` or ``.kikiwake/``) with the same name and SHA-256.
+    """
     audio = Path(session.audio_path)
-    if not audio.is_file():
-        raise AppError(f"元の音声ファイルが見つかりません: {audio}")
+    if audio.is_file():
+        return audio
+    root = _records_root(session_path.parent)
+    if root is None:
+        return None
+    for folder, subfolders, files in os.walk(root):
+        if folder == str(root):
+            subfolders[:] = [d for d in subfolders if d not in _NOT_SEARCHED]
+        subfolders.sort()
+        candidate = Path(folder) / audio.name
+        if audio.name in files and candidate.is_file() and sha256_file(candidate) == session.audio_sha256:
+            return candidate
+    return None
+
+
+def _write_viz(session: Session, session_path: Path, db: SpeakerDB, png_path: Path) -> None:
+    """Draw the voice picture of ``session`` (saved at ``session_path``) from its original audio."""
+    audio = _find_audio(session, session_path)
+    if audio is None:
+        raise AppError(f"元の音声ファイルが見つかりません: {session.audio_path}")
     require_ffmpeg()
     with tempfile.TemporaryDirectory() as tmp:
         wav_path = Path(tmp) / "audio.wav"
@@ -98,13 +130,15 @@ def _write_viz(session: Session, db: SpeakerDB, png_path: Path) -> None:
     render_viz(session, wave, db.embeddings(), png_path)
 
 
-def _refresh_viz(session: Session, db: SpeakerDB, png_path: Path) -> Path | None:
+def _refresh_viz(
+    session: Session, session_path: Path, db: SpeakerDB, png_path: Path
+) -> Path | None:
     """Draw the voice picture after the main work is saved; failing there is only a warning.
 
     Returns the picture's path, or ``None`` if it could not be drawn.
     """
     try:
-        _write_viz(session, db, png_path)
+        _write_viz(session, session_path, db, png_path)
     except (AppError, OSError) as e:
         print(f"警告: 可視化をスキップしました: {e}", file=sys.stderr)
         return None
@@ -134,7 +168,7 @@ def _cmd_transcribe(args: argparse.Namespace, home: Path, settings: Settings) ->
     _, _, png_path = session_paths(args.audio, args.output_dir)
     viz_path = None
     if args.viz or png_path.exists():  # an existing picture is redrawn so it never shows an old state
-        viz_path = _refresh_viz(session, _load_db(home, settings), png_path)
+        viz_path = _refresh_viz(session, session_path, _load_db(home, settings), png_path)
     if args.json:
         _print_json(build_summary(session, markdown_path, session_path, viz_path))
     else:
@@ -159,7 +193,7 @@ def _cmd_label(args: argparse.Namespace, home: Path, settings: Settings) -> int:
         save_session(session, args.session)
         markdown_path, _, png_path = session_paths(Path(session.audio_path), args.session.parent)
         atomic_write_text(markdown_path, render_markdown(session))
-    viz_path = _refresh_viz(session, db, png_path) if png_path.exists() else None
+    viz_path = _refresh_viz(session, args.session, db, png_path) if png_path.exists() else None
     if args.json:
         _print_json(build_summary(session, markdown_path, args.session, viz_path))
     else:
@@ -208,7 +242,7 @@ def _cmd_viz(args: argparse.Namespace, home: Path, settings: Settings) -> int:
     session = load_session(args.session)
     db = _load_db(home, settings)
     markdown_path, _, png_path = session_paths(Path(session.audio_path), args.session.parent)
-    _write_viz(session, db, png_path)  # here drawing is the whole job, so a failure is an error
+    _write_viz(session, args.session, db, png_path)  # drawing is the whole job: a failure is an error
     if args.json:
         _print_json(build_summary(session, markdown_path, args.session, png_path))
     else:

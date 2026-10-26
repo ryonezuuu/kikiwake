@@ -5,6 +5,7 @@ import shutil
 import wave
 import warnings
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +18,7 @@ from kikiwake.avalon import API_KEY_ENVS, API_KEY_FILENAME
 from kikiwake.cli import main
 from kikiwake.config import Settings
 from kikiwake.errors import AppError, UsageError
-from kikiwake.session import load_session
+from kikiwake.session import load_session, save_session
 from kikiwake.speaker_db import SpeakerDB
 
 real_make_transcriber = cli.make_transcriber
@@ -483,6 +484,70 @@ def test_viz_without_the_original_audio_exit_1(cli_env, capsys):
     assert captured.out == ""
     assert captured.err == f"エラー: 元の音声ファイルが見つかりません: {cli_env.audio}\n"
     assert not cli_env.png_path.exists()
+
+
+VM_AUDIO = "/sessions/brave-otter-1234/mnt/kikiwake/meeting.wav"  # a path of another conversation's VM
+
+
+def archived_with_vm_path(cli_env, tmp_path, capsys) -> tuple[Path, Path]:
+    """Transcribe into ``<root>/records/meeting/``, then store the audio as a VM path that no longer exists.
+
+    Returns ``(root, session_path)``.
+    """
+    root = tmp_path / "kikiwake"
+    session_path = root / "records" / "meeting" / "meeting.session.json"
+    transcribe(cli_env, capsys, "--output-dir", str(session_path.parent))
+    save_session(replace(load_session(session_path), audio_path=VM_AUDIO), session_path)
+    return root, session_path
+
+
+def put_copy(root: Path, folder: str, source: Path) -> Path:
+    target = root / folder / "meeting.wav"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(source, target)
+    return target
+
+
+def test_viz_finds_the_recording_in_the_records_folder_by_name_and_content(cli_env, tmp_path, capsys):
+    root, session_path = archived_with_vm_path(cli_env, tmp_path, capsys)
+    decoy = tmp_path / "decoy.wav"
+    write_meeting(decoy, amplitude=0.2)
+    put_copy(root, "a other meeting", decoy)  # same name, other content, and found first
+    put_copy(root, "recordings/2026", cli_env.audio)
+    cli_env.audio.unlink()
+    assert main(["viz", str(session_path)]) == 0
+    png = session_path.with_name("meeting.voices.png")
+    assert capsys.readouterr().out == f"{png}\n" and png.read_bytes().startswith(b"\x89PNG")
+    assert load_session(session_path).audio_path == VM_AUDIO  # the session is not changed
+
+
+def test_viz_does_not_take_the_recording_from_records_or_kikiwake_home(cli_env, tmp_path, capsys):
+    root, session_path = archived_with_vm_path(cli_env, tmp_path, capsys)
+    put_copy(root, "records/meeting", cli_env.audio)
+    put_copy(root, ".kikiwake", cli_env.audio)
+    assert main(["viz", str(session_path)]) == 1
+    assert capsys.readouterr().err == f"エラー: 元の音声ファイルが見つかりません: {VM_AUDIO}\n"
+
+
+def test_viz_outside_a_records_folder_does_not_search(cli_env, tmp_path, capsys):
+    out = tmp_path / "out"
+    transcribe(cli_env, capsys, "--output-dir", str(out))
+    session_path = out / "meeting.session.json"
+    save_session(replace(load_session(session_path), audio_path=VM_AUDIO), session_path)
+    put_copy(tmp_path, "elsewhere", cli_env.audio)
+    assert main(["viz", str(session_path)]) == 1
+    assert "元の音声ファイルが見つかりません" in capsys.readouterr().err
+
+
+def test_label_redraws_the_picture_from_the_found_recording(cli_env, tmp_path, capsys):
+    root, session_path = archived_with_vm_path(cli_env, tmp_path, capsys)
+    put_copy(root, "recordings", cli_env.audio)
+    png = session_path.with_name("meeting.voices.png")
+    png.write_bytes(b"stale")
+    assert main(["label", str(session_path), "spk_0=田中", "--json"]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["viz_path"] == str(png) and VIZ_SKIPPED not in captured.err
+    assert png.read_bytes().startswith(b"\x89PNG")
 
 
 def test_label_regenerates_png_only_when_it_exists(cli_env, monkeypatch, capsys):
