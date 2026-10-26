@@ -148,3 +148,39 @@ def make_session(**speaker_overrides: dict) -> Session:
         speakers=speakers,
         warnings=[],
     )
+
+
+def session_from_words(
+    words: list[tuple[str, float, float, float, bool]],
+    *,
+    duration: float | None = None,
+    states: dict[str, dict] | None = None,
+    warnings: Sequence[str] = (),
+    language: str = "ja",
+    audio_path: str = "meeting.m4a",
+) -> Session:
+    """A ``Session`` whose Avalon response is ``raw_diarized(words, ...)``.
+
+    There is one unknown ``SpeakerState`` per speaker, numbered in first-speech order from 1;
+    ``states={"spk_1": dict(status="auto", name="田中")}`` overrides fields of that speaker.
+    ``warnings`` are Avalon warnings; ``Session.warnings`` starts empty.
+    """
+    response = raw_diarized(words, duration=duration, warnings=list(warnings), language=language)
+    ids = [s["id"] for s in response["speakers"]]
+    states = states or {}
+    unexpected = set(states) - set(ids)
+    if unexpected:
+        raise TypeError(f"unknown speakers: {sorted(unexpected)}")
+    speakers = {
+        sid: make_state(**{"id": sid, "number": i + 1, **states.get(sid, {})})
+        for i, sid in enumerate(ids)
+    }
+    return Session(
+        audio_path=audio_path,
+        audio_sha256="sha",
+        created_at="2026-10-26T10:00:00+09:00",
+        model_id="fake",
+        avalon_response=response,
+        speakers=speakers,
+        warnings=[],
+    )
