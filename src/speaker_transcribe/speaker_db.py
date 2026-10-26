@@ -1,10 +1,13 @@
 """Persistent voiceprint database (``db.json``): each known person and their embedding samples."""
 
+import fcntl
 import json
 import os
+import sys
 import tempfile
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +18,8 @@ import numpy as np
 from speaker_transcribe.errors import UsageError
 
 DB_VERSION = 1
+
+_WAITING = "別の speaker-transcribe が DB を使用中のため待機しています…"
 
 Source = Literal["auto", "label"]
 _SOURCES: tuple[str, ...] = get_args(Source)
@@ -49,6 +54,27 @@ def atomic_write_text(path: Path, text: str) -> None:
     except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise
+
+
+@contextmanager
+def locked(db_path: Path) -> Iterator[None]:
+    """Hold the exclusive inter-process lock of the DB at ``db_path`` (on ``<db_path>.lock``).
+
+    Commands hold it from loading the DB to saving it, so that one cannot overwrite what another
+    saved in between. If another process holds it, say so once on stderr and wait.
+    """
+    lock_path = db_path.with_name(f"{db_path.name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a") as fh:  # the file only carries the lock; it is never written
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(_WAITING, file=sys.stderr, flush=True)
+            fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 def _local_now() -> str:

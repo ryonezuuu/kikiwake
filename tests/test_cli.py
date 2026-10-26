@@ -3,6 +3,7 @@ import json
 import re
 import wave
 import warnings
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,7 @@ from speaker_transcribe.cli import main
 from speaker_transcribe.config import Settings
 from speaker_transcribe.errors import UsageError
 from speaker_transcribe.session import load_session
+from speaker_transcribe.speaker_db import SpeakerDB
 
 real_make_transcriber = cli.make_transcriber
 ISO_SECONDS_WITH_OFFSET = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d")
@@ -36,12 +38,12 @@ class FreqEmbedder:
         return unit(0 if peak < 200 else 1)
 
 
-def write_meeting(path: Path) -> None:
+def write_meeting(path: Path, amplitude: float = 0.3) -> None:
     t = np.arange(round(DURATION * SAMPLE_RATE)) / SAMPLE_RATE
     signal = np.zeros_like(t)
     for _, start, end, freq in REGIONS:
         inside = (t >= start) & (t < end)
-        signal[inside] = 0.3 * np.sin(2 * np.pi * freq * t[inside])
+        signal[inside] = amplitude * np.sin(2 * np.pi * freq * t[inside])
     with wave.open(str(path), "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
@@ -109,6 +111,83 @@ def test_transcribe_json_then_label(cli_env, capsys):
     assert main(["label", summary["session_path"], "spk_0=田中", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["speakers"][0]["label"] == "田中"
     assert "**[00:00:00] 田中**" in Path(summary["markdown_path"]).read_text()
+
+
+def db_names(capsys) -> list[str]:
+    capsys.readouterr()
+    assert main(["speakers", "list", "--json"]) == 0
+    return [p["name"] for p in json.loads(capsys.readouterr().out)]
+
+
+def test_label_made_while_transcribe_waits_for_the_api_is_kept(cli_env, capsys):
+    other = cli_env.tmp_path / "other.wav"  # the same two voices in another meeting
+    write_meeting(other, amplitude=0.2)
+    assert main(["transcribe", str(other)]) == 0
+    api = cli_env.transcriber
+
+    def slow_api(mp3, opts):  # while this call is "in flight", the user names a speaker of the other meeting
+        assert main(["label", str(other.with_suffix(".session.json")), "spk_1=佐藤"]) == 0
+        capsys.readouterr()  # that command's own output
+        return api(mp3, opts)
+
+    cli_env.transcriber = slow_api
+    summary = transcribe(cli_env, capsys)
+    assert db_names(capsys) == ["佐藤"]  # not overwritten by a snapshot taken before the label
+    assert load_session(other.with_suffix(".session.json")).speakers["spk_1"].status == "confirmed"
+    spk_1 = summary["speakers"][1]
+    assert (spk_1["label"], spk_1["status"]) == ("佐藤", "auto")  # matched against the fresh DB
+
+
+def track_db(monkeypatch) -> list[str]:
+    """Record taking the DB lock, loading and saving the DB, in order."""
+    events: list[str] = []
+    real_locked, real_load, real_save = cli.locked, SpeakerDB.load, SpeakerDB.save
+
+    @contextmanager
+    def tracked_locked(path):
+        with real_locked(path):
+            events.append("lock")
+            yield
+            events.append("unlock")
+
+    def tracked_load(cls, *args, **kwargs):
+        events.append("load")
+        return real_load(*args, **kwargs)
+
+    def tracked_save(self):
+        events.append("save")
+        real_save(self)
+
+    monkeypatch.setattr(cli, "locked", tracked_locked)
+    monkeypatch.setattr(SpeakerDB, "load", classmethod(tracked_load))
+    monkeypatch.setattr(SpeakerDB, "save", tracked_save)
+    return events
+
+
+def test_commands_that_change_the_db_hold_its_lock_from_load_to_save(cli_env, monkeypatch):
+    main(["transcribe", str(cli_env.audio)])
+    events = track_db(monkeypatch)
+    for argv in (
+        ["label", str(cli_env.session_path), "spk_0=田中"],
+        ["speakers", "rename", "田中", "鈴木"],
+        ["speakers", "delete", "鈴木"],
+    ):
+        events.clear()
+        assert main(argv) == 0
+        assert events == ["lock", "load", "save", "unlock"], argv
+
+
+def test_transcribe_checks_the_db_early_but_changes_it_only_under_the_lock(cli_env, monkeypatch):
+    events = track_db(monkeypatch)
+    api = cli_env.transcriber
+
+    def tracked_api(mp3, opts):
+        events.append("api")
+        return api(mp3, opts)
+
+    cli_env.transcriber = tracked_api
+    assert main(["transcribe", str(cli_env.audio)]) == 0
+    assert events == ["load", "api", "lock", "load", "save", "unlock"]
 
 
 def test_label_bad_key_exit_2(cli_env, capsys):

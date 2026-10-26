@@ -5,7 +5,8 @@ import json
 import sys
 import tempfile
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from speaker_transcribe.labeling import apply_labels
 from speaker_transcribe.pipeline import TranscribeOptions, Transcriber, run_transcribe
 from speaker_transcribe.render import build_summary, render_markdown
 from speaker_transcribe.session import Session, load_session, save_session, session_paths
-from speaker_transcribe.speaker_db import SpeakerDB, atomic_write_text
+from speaker_transcribe.speaker_db import SpeakerDB, atomic_write_text, locked
 from speaker_transcribe.viz import render_viz
 
 _MAX_SPEAKERS = 8
@@ -55,8 +56,20 @@ def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def _db_path(home: Path) -> Path:
+    return home / "db.json"
+
+
 def _load_db(home: Path, settings: Settings) -> SpeakerDB:
-    return SpeakerDB.load(home / "db.json", MODEL_ID, DIM, settings.max_samples_per_person)
+    """The DB as saved, for reading only (writes replace the file atomically)."""
+    return SpeakerDB.load(_db_path(home), MODEL_ID, DIM, settings.max_samples_per_person)
+
+
+@contextmanager
+def _open_db(home: Path, settings: Settings) -> Iterator[SpeakerDB]:
+    """Lock the DB and load it, for a change that is saved before the block ends."""
+    with locked(_db_path(home)):
+        yield _load_db(home, settings)
 
 
 def _print_json(data: object) -> None:
@@ -83,7 +96,7 @@ def _summary(session: Session, markdown_path: Path, session_path: Path, png_path
 
 
 def _cmd_transcribe(args: argparse.Namespace, home: Path, settings: Settings) -> int:
-    db = _load_db(home, settings)  # before the model, so a mismatched DB fails fast
+    _load_db(home, settings)  # before the model and the API, so a mismatched DB fails fast
     opts = TranscribeOptions(
         output_dir=args.output_dir,
         language=args.language,
@@ -95,14 +108,14 @@ def _cmd_transcribe(args: argparse.Namespace, home: Path, settings: Settings) ->
         args.audio,
         opts,
         settings=settings,
-        db=db,
+        open_db=lambda: _open_db(home, settings),
         embedder=make_embedder(home),
         transcriber=make_transcriber(settings),
         now=_now,
     )
     _, _, png_path = session_paths(args.audio, args.output_dir)
     if args.viz:
-        _write_viz(session, db, png_path)
+        _write_viz(session, _load_db(home, settings), png_path)
     if args.json:
         _print_json(_summary(session, markdown_path, session_path, png_path))
     else:
@@ -119,14 +132,14 @@ def _parse_pair(arg: str) -> tuple[str, str]:
 
 def _cmd_label(args: argparse.Namespace, home: Path, settings: Settings) -> int:
     pairs = [_parse_pair(arg) for arg in args.pairs]
-    session = load_session(args.session)
-    db = _load_db(home, settings)
-    for warning in apply_labels(session, db, pairs):
-        print(f"警告: {warning}", file=sys.stderr)
-    db.save()
-    save_session(session, args.session)
-    markdown_path, _, png_path = session_paths(Path(session.audio_path), args.session.parent)
-    atomic_write_text(markdown_path, render_markdown(session))
+    with _open_db(home, settings) as db:
+        session = load_session(args.session)  # under the lock too: another `label` may be saving it
+        for warning in apply_labels(session, db, pairs):
+            print(f"警告: {warning}", file=sys.stderr)
+        db.save()
+        save_session(session, args.session)
+        markdown_path, _, png_path = session_paths(Path(session.audio_path), args.session.parent)
+        atomic_write_text(markdown_path, render_markdown(session))
     if png_path.exists():
         _write_viz(session, db, png_path)
     if args.json:
@@ -155,18 +168,18 @@ def _cmd_speakers_list(args: argparse.Namespace, home: Path, settings: Settings)
 
 
 def _cmd_speakers_rename(args: argparse.Namespace, home: Path, settings: Settings) -> int:
-    db = _load_db(home, settings)
-    db.rename(args.old, args.new)
-    db.save()
+    with _open_db(home, settings) as db:
+        db.rename(args.old, args.new)
+        db.save()
     if args.json:
         _print_json({"renamed": {"from": args.old, "to": args.new}})
     return 0
 
 
 def _cmd_speakers_delete(args: argparse.Namespace, home: Path, settings: Settings) -> int:
-    db = _load_db(home, settings)
-    db.delete(args.name)
-    db.save()
+    with _open_db(home, settings) as db:
+        db.delete(args.name)
+        db.save()
     if args.json:
         _print_json({"deleted": args.name})
     return 0

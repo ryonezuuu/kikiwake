@@ -1,6 +1,7 @@
 import copy
 import shutil
 import wave
+from contextlib import contextmanager
 from dataclasses import replace
 
 import numpy as np
@@ -14,7 +15,7 @@ from speaker_transcribe.errors import AppError, UsageError
 from speaker_transcribe.labeling import apply_labels
 from speaker_transcribe.pipeline import TranscribeOptions, run_transcribe
 from speaker_transcribe.session import load_session, save_session
-from speaker_transcribe.speaker_db import SpeakerDB
+from speaker_transcribe.speaker_db import SpeakerDB, locked
 
 DURATION = 30.0
 # (speaker, first word start, end, tone frequency): clean speech, 0.5 s per word, no gaps or overlap.
@@ -66,22 +67,46 @@ class Env:
         self.response = meeting_response()
         self.settings = Settings()
         self.db_path = tmp_path / "db.json"
-        self.db = SpeakerDB.load(self.db_path, "fake", 4, self.settings.max_samples_per_person)
         self.calls = 0
+
+    @property
+    def db(self) -> SpeakerDB:
+        """The DB as saved on disk."""
+        return SpeakerDB.load(self.db_path, "fake", 4, self.settings.max_samples_per_person)
+
+    @contextmanager
+    def open_db(self):
+        with locked(self.db_path):
+            yield self.db
+
+    def seed(self, name, embedding, sha="other-sha", source="label"):
+        """Save a sample from some other recording to the DB."""
+        with self.open_db() as db:
+            db.add_sample(name, embedding, sha, source)
+            db.save()
+
+    def label(self, session_path, pairs):
+        """Name speakers of a saved session, as the `label` command does."""
+        with self.open_db() as db:
+            session = load_session(session_path)
+            apply_labels(session, db, pairs)
+            db.save()
+            save_session(session, session_path)
+        return session
 
     def transcribe(self, mp3, opts):
         assert mp3.suffix == ".mp3" and mp3.stat().st_size > 0
         self.calls += 1
         return copy.deepcopy(self.response)
 
-    def run(self, audio=None, **opts):
+    def run(self, audio=None, *, transcriber=None, embedder=None, **opts):
         return run_transcribe(
             audio or self.audio,
             TranscribeOptions(**opts),
             settings=self.settings,
-            db=self.db,
-            embedder=FreqEmbedder(),
-            transcriber=self.transcribe,
+            open_db=self.open_db,
+            embedder=embedder or FreqEmbedder(),
+            transcriber=transcriber or self.transcribe,
             now=lambda: NOW,
         )
 
@@ -92,12 +117,9 @@ def env(tmp_path):
 
 
 def label_first_run(env):
-    """Run once, name spk_0 「田中」, and persist both the session and the DB (as the `label` command does)."""
-    s1, md, ss = env.run()
-    apply_labels(s1, env.db, [("spk_0", "田中")])
-    save_session(s1, ss)
-    env.db.save()
-    return s1, md, ss
+    """Run once and name spk_0 「田中」 (as the `label` command does)."""
+    _, md, ss = env.run()
+    return env.label(ss, [("spk_0", "田中")]), md, ss
 
 
 def test_first_run_writes_outputs_and_unknown_labels(env):
@@ -124,9 +146,7 @@ def test_speaker_states_hold_voiceprint_details(env):
 
 
 def test_second_meeting_auto_names_after_label(env):
-    s1, _, ss = env.run()
-    apply_labels(s1, env.db, [("spk_0", "田中")])
-    env.db.save()
+    label_first_run(env)
     s2, _, _ = env.run(audio=env.other_meeting_same_voices)
     assert s2.speakers["spk_0"].status == "auto" and s2.speakers["spk_0"].name == "田中"
     assert len(s2.speakers["spk_0"].db_sample_ids) == 1
@@ -137,10 +157,7 @@ def test_second_meeting_auto_names_after_label(env):
 
 
 def test_rerun_uses_cache_and_reapplies_labels(env):
-    s1, _, ss = env.run()
-    apply_labels(s1, env.db, [("spk_0", "田中")])
-    save_session(s1, ss)
-    env.db.save()
+    label_first_run(env)
     s2, md, _ = env.run()
     assert env.calls == 1  # API は呼ばれない
     assert s2.speakers["spk_0"].status == "confirmed"
@@ -174,9 +191,7 @@ def test_force_api_without_confirmed_labels_does_not_warn(env):
 
 
 def test_moved_audio_does_not_self_match(env, tmp_path):
-    s1, _, _ = env.run()
-    apply_labels(s1, env.db, [("spk_0", "田中")])
-    env.db.save()
+    label_first_run(env)
     moved = tmp_path / "moved" / "meeting.wav"
     moved.parent.mkdir()
     shutil.copy(env.audio, moved)
@@ -242,7 +257,7 @@ def test_unknown_avalon_warning_is_ignored(env):
 def test_speaker_with_too_little_speech_is_insufficient(env):
     words = clean_words("spk_0", 1.0, 9.0) + clean_words("spk_1", 11.0, 12.5)
     env.response = raw_diarized(words, duration=DURATION)
-    env.db.add_sample("田中", unit(1), "other-sha", "label")
+    env.seed("田中", unit(1))
     session, _, _ = env.run()
     st = session.speakers["spk_1"]
     assert (st.status, st.name, st.score, st.scores) == ("insufficient", None, None, {})
@@ -271,22 +286,41 @@ def test_progress_goes_to_stderr_only(env, capsys):
 
 
 def test_failed_transcription_leaves_db_untouched(env):
-    s1, _, _ = env.run()
-    apply_labels(s1, env.db, [("spk_0", "田中")])
-    env.db.save()
+    label_first_run(env)
     before = env.db_path.read_text(encoding="utf-8")
 
     def broken(mp3, opts):
         raise AppError("boom")
 
     with pytest.raises(AppError, match="boom"):
-        run_transcribe(
-            env.audio,
-            TranscribeOptions(force_api=True),
-            settings=env.settings,
-            db=env.db,
-            embedder=FreqEmbedder(),
-            transcriber=broken,
-            now=lambda: NOW,
-        )
+        env.run(transcriber=broken, force_api=True)
     assert env.db_path.read_text(encoding="utf-8") == before
+
+
+def test_label_made_while_the_api_is_in_flight_is_kept(env):
+    _, _, other = env.run(audio=env.other_meeting_same_voices)
+
+    def slow_api(mp3, opts):  # meanwhile, a `label` command names a speaker of the other meeting
+        env.label(other, [("spk_1", "佐藤")])
+        return env.transcribe(mp3, opts)
+
+    session, _, _ = env.run(transcriber=slow_api)
+    assert list(env.db.people()) == ["佐藤"]
+    assert (session.speakers["spk_1"].status, session.speakers["spk_1"].name) == ("auto", "佐藤")
+
+
+def test_label_made_while_a_cached_rerun_computes_voiceprints_is_kept(env):
+    _, _, ss = env.run()
+    labelled = []
+
+    class LabellingMidway(FreqEmbedder):
+        def embed(self, wave):
+            if not labelled:  # meanwhile, a `label` command names spk_1 of this very session
+                labelled.append(env.label(ss, [("spk_1", "佐藤")]))
+            return super().embed(wave)
+
+    s2, _, _ = env.run(embedder=LabellingMidway())
+    assert env.calls == 1 and labelled
+    assert (s2.speakers["spk_1"].status, s2.speakers["spk_1"].name) == ("confirmed", "佐藤")
+    assert [x.id for x in env.db.people()["佐藤"]] == s2.speakers["spk_1"].db_sample_ids
+    assert load_session(ss).speakers["spk_1"].status == "confirmed"

@@ -3,13 +3,14 @@ import os
 import re
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from speaker_transcribe.errors import UsageError
-from speaker_transcribe.speaker_db import SpeakerDB, atomic_write_text
+from speaker_transcribe.speaker_db import SpeakerDB, atomic_write_text, locked
 
 DIM = 192
 
@@ -341,6 +342,50 @@ def test_save_creates_missing_parent_directory(tmp_path):
     db.add_sample("田中", unit(0), "s", "auto")
     db.save()
     assert SpeakerDB.load(path, "m", DIM, 20).people().keys() == {"田中"}
+
+
+WAITING = "別の speaker-transcribe が DB を使用中のため待機しています…\n"
+
+
+def src_env() -> dict[str, str]:
+    return {**os.environ, "PYTHONPATH": str(Path(__file__).parents[1] / "src")}
+
+
+def test_locked_makes_the_lock_file_beside_the_db_and_releases_it(tmp_path, capsys):
+    db_path = tmp_path / "new home" / "db.json"
+    with locked(db_path):
+        assert (tmp_path / "new home" / "db.json.lock").is_file()
+    with pytest.raises(RuntimeError), locked(db_path):
+        raise RuntimeError  # released on errors too
+    with locked(db_path):
+        pass
+    assert capsys.readouterr().err == ""  # never had to wait
+    assert not db_path.exists()
+
+
+def test_locked_makes_another_process_wait_and_say_so(tmp_path):
+    db_path = tmp_path / "db.json"
+    code = textwrap.dedent(
+        """
+        import sys
+        from pathlib import Path
+        from speaker_transcribe.speaker_db import locked
+        with locked(Path(sys.argv[1])):
+            print("acquired")
+        """
+    )
+    with locked(db_path):
+        other = subprocess.Popen(
+            [sys.executable, "-c", code, str(db_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=src_env(),
+        )
+        assert other.stderr.readline() == WAITING
+        assert other.poll() is None  # still blocked while this process holds the lock
+    out, err = other.communicate(timeout=60)
+    assert (out, err, other.returncode) == ("acquired\n", "", 0)
 
 
 def test_speaker_db_does_not_import_torch():

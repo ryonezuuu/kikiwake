@@ -3,6 +3,7 @@
 import sys
 import tempfile
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,6 +47,9 @@ class TranscribeOptions:
 # Takes the MP3 to upload and returns the raw Avalon ``diarized_json`` response.
 Transcriber = Callable[[Path, TranscribeOptions], dict]
 
+# Locks the voiceprint DB and yields it freshly loaded; the lock is held until the block ends.
+DBOpener = Callable[[], AbstractContextManager[SpeakerDB]]
+
 
 def _progress(message: str) -> None:
     print(message, file=sys.stderr)
@@ -68,14 +72,15 @@ def run_transcribe(
     opts: TranscribeOptions,
     *,
     settings: Settings,
-    db: SpeakerDB,
+    open_db: DBOpener,
     embedder: Embedder,
     transcriber: Transcriber,
     now: Callable[[], str],
 ) -> tuple[Session, Path, Path]:
     """Transcribe ``audio`` and name its speakers; return ``(session, markdown_path, session_path)``.
 
-    ``db`` is changed in memory throughout and saved only once everything else has succeeded.
+    The DB is opened (locked and loaded) only once the transcript and the voiceprints are ready,
+    so a ``label`` run while the API is working is not overwritten; it is saved before the lock ends.
     """
     require_ffmpeg()
     if not audio.is_file():
@@ -84,10 +89,6 @@ def run_transcribe(
     markdown_path, session_path, _ = session_paths(audio, opts.output_dir)
     prev = _load_previous(session_path, sha)
     cached = None if opts.force_api else prev  # the session whose Avalon response may be reused
-
-    # Take back this recording's earlier samples first, so it cannot match its own voices
-    # and a rerun cannot add them twice.
-    db.remove_by_session(sha)
 
     if probe_duration(audio) > settings.max_duration:
         raise AppError(_TOO_LONG)
@@ -112,65 +113,75 @@ def run_transcribe(
         sid: build_voiceprint(wave, tr, sid, embedder, settings) for sid in tr.speaker_ids
     }
     centroids = {sid: vp.centroid for sid, vp in voiceprints.items() if vp.centroid is not None}
-    scores = score_table(centroids, db.embeddings(), settings.top_k)
-    matches = assign(scores, settings)
 
-    speakers: dict[str, SpeakerState] = {}
-    for number, sid in enumerate(tr.speaker_ids, start=1):
-        vp = voiceprints[sid]
-        sample_ids: list[str] = []
-        if vp.centroid is None:
-            status, name, score = "insufficient", None, None
-        else:
-            match = matches[sid]
-            status, name, score = match.status, match.name, match.score
-            if status == "auto" and name is not None:
-                sample_ids = [db.add_sample(name, vp.centroid, sha, "auto")]
-        speakers[sid] = SpeakerState(
-            id=sid,
-            number=number,
-            segments=vp.segments,
-            total_seconds=vp.total_seconds,
-            centroid=None if vp.centroid is None else vp.centroid.tolist(),
-            consistency=vp.consistency,
-            scores=scores.get(sid, {}),
-            status=status,
-            name=name,
-            score=score,
-            db_sample_ids=sample_ids,
+    with open_db() as db:
+        if cached is not None:
+            # A `label` may have changed the session since it was read; under the lock it cannot.
+            latest = _load_previous(session_path, sha)
+            if latest is not None and latest.avalon_response == raw:
+                prev = cached = latest
+        # Take back this recording's earlier samples first, so it cannot match its own voices
+        # and a rerun cannot add them twice.
+        db.remove_by_session(sha)
+        scores = score_table(centroids, db.embeddings(), settings.top_k)
+        matches = assign(scores, settings)
+
+        speakers: dict[str, SpeakerState] = {}
+        for number, sid in enumerate(tr.speaker_ids, start=1):
+            vp = voiceprints[sid]
+            sample_ids: list[str] = []
+            if vp.centroid is None:
+                status, name, score = "insufficient", None, None
+            else:
+                match = matches[sid]
+                status, name, score = match.status, match.name, match.score
+                if status == "auto" and name is not None:
+                    sample_ids = [db.add_sample(name, vp.centroid, sha, "auto")]
+            speakers[sid] = SpeakerState(
+                id=sid,
+                number=number,
+                segments=vp.segments,
+                total_seconds=vp.total_seconds,
+                centroid=None if vp.centroid is None else vp.centroid.tolist(),
+                consistency=vp.consistency,
+                scores=scores.get(sid, {}),
+                status=status,
+                name=name,
+                score=score,
+                db_sample_ids=sample_ids,
+            )
+
+        warnings: list[dict] = []
+        if "speaker_limit_reached" in tr.warnings:
+            warnings.append({"code": "speaker_limit_reached"})
+        for sid, vp in voiceprints.items():
+            if vp.consistency is not None and vp.consistency < settings.min_consistency:
+                warnings.append({"code": "low_consistency", "speaker": sid})
+        if (
+            prev is not None
+            and opts.force_api
+            and any(st.status == "confirmed" for st in prev.speakers.values())
+        ):
+            warnings.append({"code": "labels_discarded"})
+
+        session = Session(
+            audio_path=str(audio),
+            audio_sha256=sha,
+            created_at=now(),
+            model_id=embedder.model_id,
+            avalon_response=raw,
+            speakers=speakers,
+            warnings=warnings,
         )
 
-    warnings: list[dict] = []
-    if "speaker_limit_reached" in tr.warnings:
-        warnings.append({"code": "speaker_limit_reached"})
-    for sid, vp in voiceprints.items():
-        if vp.consistency is not None and vp.consistency < settings.min_consistency:
-            warnings.append({"code": "low_consistency", "speaker": sid})
-    if (
-        prev is not None
-        and opts.force_api
-        and any(st.status == "confirmed" for st in prev.speakers.values())
-    ):
-        warnings.append({"code": "labels_discarded"})
+        # With the cached response the speaker ids are unchanged, so earlier names can be restored.
+        if cached is not None:
+            for sid, old in cached.speakers.items():
+                if old.status == "confirmed" and old.name is not None and sid in speakers:
+                    for warning in apply_label(session, db, sid, old.name):
+                        _progress(f"警告: {warning}")
 
-    session = Session(
-        audio_path=str(audio),
-        audio_sha256=sha,
-        created_at=now(),
-        model_id=embedder.model_id,
-        avalon_response=raw,
-        speakers=speakers,
-        warnings=warnings,
-    )
-
-    # With the cached response the speaker ids are unchanged, so earlier names can be restored.
-    if cached is not None:
-        for sid, old in cached.speakers.items():
-            if old.status == "confirmed" and old.name is not None and sid in speakers:
-                for warning in apply_label(session, db, sid, old.name):
-                    _progress(f"警告: {warning}")
-
-    db.save()
-    save_session(session, session_path)
-    atomic_write_text(markdown_path, render_markdown(session))
+        db.save()
+        save_session(session, session_path)
+        atomic_write_text(markdown_path, render_markdown(session))
     return session, markdown_path, session_path
