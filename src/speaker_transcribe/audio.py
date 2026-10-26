@@ -58,6 +58,7 @@ def _convert(src: Path, dst: Path, codec_args: list[str]) -> None:
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-i", str(src),
+        "-vn",  # drop video and cover-art streams: only the sound is needed
         "-ac", "1", "-ar", str(SAMPLE_RATE),
         *codec_args,
         str(dst),

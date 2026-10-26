@@ -69,6 +69,39 @@ def test_upload_mp3_is_mono_16k(tmp_path):
     assert ffprobe_stream(mp3) == {"channels": 1, "sample_rate": 16000}
 
 
+def make_m4a_with_cover_art(path: Path) -> None:
+    cover = path.with_name("cover.png")
+    run = lambda *args: subprocess.run(  # noqa: E731
+        ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *args], check=True, capture_output=True
+    )
+    run("-f", "lavfi", "-i", "color=c=red:s=64x64", "-frames:v", "1", str(cover))
+    run(
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-i", str(cover),
+        "-map", "0:a", "-map", "1:v", "-c:a", "aac", "-c:v", "mjpeg",
+        "-disposition:v:0", "attached_pic", str(path),
+    )  # fmt: skip
+
+
+def stream_types(path: Path) -> list[str]:
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.split()
+
+
+def test_conversions_drop_cover_art(tmp_path):
+    src = tmp_path / "with cover.m4a"
+    make_m4a_with_cover_art(src)
+    assert sorted(stream_types(src)) == ["audio", "video"]
+    to_upload_mp3(src, tmp_path / "up.mp3")
+    to_wav16k(src, tmp_path / "a.wav")
+    assert stream_types(tmp_path / "up.mp3") == ["audio"]
+    assert stream_types(tmp_path / "a.wav") == ["audio"]
+
+
 def test_cut_clamps():
     w = np.zeros(16000, dtype=np.float32)
     assert len(cut(w, 0.5, 2.0)) == 8000 and len(cut(w, -1.0, 0.25)) == 4000
