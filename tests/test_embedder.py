@@ -33,8 +33,13 @@ def test_constants():
 
 
 @pytest.fixture(scope="module")
-def embedder(tmp_path_factory):
-    return EcapaEmbedder(tmp_path_factory.mktemp("models"))
+def savedir(tmp_path_factory):
+    return tmp_path_factory.mktemp("models")
+
+
+@pytest.fixture(scope="module")
+def embedder(savedir):
+    return EcapaEmbedder(savedir)
 
 
 @pytest.fixture
@@ -46,6 +51,14 @@ def emb(embedder, tmp_path):
         return embedder.embed(load_wav(wav))
 
     return _emb
+
+
+@pytest.mark.model
+def test_model_files_live_in_savedir(embedder, savedir):
+    for name in ("embedding_model.ckpt", "mean_var_norm_emb.ckpt", "classifier.ckpt", "label_encoder.ckpt"):
+        assert (savedir / name).is_file(), name
+    assert (savedir / "embedding_model.ckpt").stat().st_size > 1_000_000
+    assert not [p for p in savedir.rglob("*") if p.is_symlink()]
 
 
 @pytest.mark.model

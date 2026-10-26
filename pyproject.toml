@@ -28,6 +28,10 @@ markers = [
     "e2e: calls the real Avalon API",
 ]
 pythonpath = ["src", "tests"]
+filterwarnings = [
+    # speechbrain 1.1.2 passes this deprecated argument for LocalStrategy.COPY_SKIP_CACHE.
+    "ignore:The `local_dir_use_symlinks` argument is deprecated:UserWarning",
+]
 
 [dependency-groups]
 dev = [

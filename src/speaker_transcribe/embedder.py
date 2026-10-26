@@ -34,6 +34,7 @@ class EcapaEmbedder:
     def __init__(self, savedir: Path) -> None:
         import torch
         from speechbrain.inference.speaker import EncoderClassifier
+        from speechbrain.utils.fetching import LocalStrategy
 
         self._torch = torch
         try:
@@ -41,6 +42,9 @@ class EcapaEmbedder:
                 source=self.model_id,
                 savedir=str(savedir),
                 run_opts={"device": "cpu"},
+                # Download straight into savedir (no symlinks into the HF cache), so the
+                # weights live under the data directory.
+                local_strategy=LocalStrategy.COPY_SKIP_CACHE,
             )
         except Exception as e:
             raise AppError("埋め込みモデルのダウンロードに失敗しました。ネットワーク接続を確認してください") from e
