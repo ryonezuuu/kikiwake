@@ -170,7 +170,7 @@ Claude の **Cowork** に会議の録音を渡すと、名前付きの文字起�
 
    ```bash
    read -rs "key?API キーを貼り付けて Enter: "; echo
-   printf '%s\n' "$key" > ~/Documents/kikiwake/.kikiwake/aquavoice_api_key; unset key
+   (umask 077; printf '%s\n' "$key" > ~/Documents/kikiwake/.kikiwake/aquavoice_api_key); unset key
    chmod 600 ~/Documents/kikiwake/.kikiwake/aquavoice_api_key
    ```
 
@@ -184,10 +184,11 @@ Claude の **Cowork** に会議の録音を渡すと、名前付きの文字起�
    すでに `~/.local/share/kikiwake/` に声紋 DB（`db.json`）と声紋モデル（`models/`）があれば、
    中身を `~/Documents/kikiwake/.kikiwake/` に移してください。
 
-4. **スキルの ZIP を作ります。** `dist/` はリポジトリのルートに作られます（実行するディレクトリは問いません）。
+4. **スキルの ZIP を作ります。** スクリプトは自分の場所からリポジトリのルートを探すので、どのディレクトリから実行してもかまいません
+   （`dist/` はリポジトリのルートに作られます）。
 
    ```bash
-   bash scripts/make-skill-zip.sh
+   bash /path/to/kikiwake/scripts/make-skill-zip.sh   # リポジトリのルートなら: bash scripts/make-skill-zip.sh
    ```
 
    `dist/kikiwake-skill.zip` ができます（ZIP のルートは `kikiwake/` で、中に `SKILL.md` があります）。
@@ -277,7 +278,8 @@ iCloud に上げたくないときは、同期の対象外の場所に記録フ�
   フォルダの名前が `kikiwake` であることも確かめてください。
 - **API キーが見つからない（終了コード 2）**: 準備の 2 を実行してください。
 - **インストールが失敗する**: Cowork の仮想マシンはネットワークが制限されています。エラーにブロックされたホストが出ていたら、
-  Cowork の設定のネットワークの許可リストにそのドメインを追加してください。`kikiwake` が使うのは次のとおりです
+  Cowork の設定でネットワークの許可（許可するドメインの一覧）を確認し、そのドメインを追加してください
+  （設定画面の名前や場所は、バージョンによって違うことがあります）。`kikiwake` が使うのは次のとおりです
   （API はまだ呼ばれていないので、失敗しても料金はかかりません）。
 
   | ドメイン | 用途 |
