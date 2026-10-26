@@ -65,7 +65,11 @@ def _db_path(home: Path) -> Path:
 
 
 def _load_db(home: Path, settings: Settings) -> SpeakerDB:
-    """The DB as saved, for reading only (writes replace the file atomically)."""
+    """The DB as saved, for reading only, without the lock.
+
+    A read that meets a save midway is still whole: either the file is replaced at once, or (written in
+    place) a torn file is read from the backup that the save wrote in full first.
+    """
     return SpeakerDB.load(
         _db_path(home),
         MODEL_ID,

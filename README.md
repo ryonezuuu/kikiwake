@@ -174,7 +174,7 @@ Claude の **Cowork** に会議の録音を渡すと、名前付きの文字起�
    次のコマンドは、キーを画面にもシェルの履歴にも残しません。
 
    ```bash
-   read -rs "key?API キーを貼り付けて Enter: "; echo
+   printf 'API キーを貼り付けて Enter: '; read -rs key; echo
    (umask 077; printf '%s\n' "$key" > ~/Documents/kikiwake/.kikiwake/aquavoice_api_key); unset key
    chmod 600 ~/Documents/kikiwake/.kikiwake/aquavoice_api_key
    ```

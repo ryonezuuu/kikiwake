@@ -78,7 +78,7 @@ API キーは次の順に読まれる: 環境変数 `AQUAVOICE_API` → `AQUAVOI
 
   ```bash
   mkdir -p ~/Documents/kikiwake/.kikiwake
-  read -rs "key?API キーを貼り付けて Enter: "; echo
+  printf 'API キーを貼り付けて Enter: '; read -rs key; echo
   (umask 077; printf '%s\n' "$key" > ~/Documents/kikiwake/.kikiwake/aquavoice_api_key); unset key
   chmod 600 ~/Documents/kikiwake/.kikiwake/aquavoice_api_key
   ```
