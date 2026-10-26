@@ -1,5 +1,6 @@
 import copy
 import json
+from dataclasses import replace
 
 import pytest
 from conftest import make_session, make_state
@@ -89,3 +90,43 @@ def test_load_rejects_unknown_status(tmp_path):
 def test_load_missing_file(tmp_path):
     with pytest.raises(UsageError, match="nope.session.json"):
         load_session(tmp_path / "nope.session.json")
+
+
+RECORDED_AT = "2026-10-16T12:55:20+09:00"
+
+
+def test_recorded_at_roundtrips(tmp_path):
+    s = replace(make_session(), recorded_at=RECORDED_AT)
+    path = tmp_path / "x.session.json"
+    save_session(s, path)
+    assert json.loads(path.read_text(encoding="utf-8"))["recorded_at"] == RECORDED_AT
+    assert load_session(path) == s
+
+
+def test_recorded_at_defaults_to_none_and_is_always_written(tmp_path):
+    s = make_session()
+    assert s.recorded_at is None
+    path = tmp_path / "x.session.json"
+    save_session(s, path)
+    assert json.loads(path.read_text(encoding="utf-8"))["recorded_at"] is None
+    assert load_session(path).recorded_at is None
+
+
+def test_session_without_recorded_at_still_loads(tmp_path):
+    path = tmp_path / "x.session.json"
+    save_session(replace(make_session(), recorded_at=RECORDED_AT), path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    del data["recorded_at"]  # a session.json written before the key existed
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert load_session(path) == make_session()
+
+
+@pytest.mark.parametrize("value", [123, 1.5, True, [], {}], ids=repr)
+def test_load_rejects_non_string_recorded_at(tmp_path, value):
+    path = tmp_path / "x.session.json"
+    save_session(make_session(), path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["recorded_at"] = value
+    path.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(UsageError, match="x.session.json"):
+        load_session(path)

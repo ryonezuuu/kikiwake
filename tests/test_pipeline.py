@@ -1,8 +1,10 @@
 import copy
+import os
 import shutil
 import wave
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import datetime
 
 import numpy as np
 import pytest
@@ -13,7 +15,7 @@ from kikiwake.audio import SAMPLE_RATE, sha256_file
 from kikiwake.config import Settings
 from kikiwake.errors import AppError, UsageError
 from kikiwake.labeling import apply_labels
-from kikiwake.pipeline import TranscribeOptions, run_transcribe
+from kikiwake.pipeline import TranscribeOptions, recorded_at_for, run_transcribe
 from kikiwake.session import load_session, save_session
 from kikiwake.speaker_db import SpeakerDB, locked
 
@@ -503,3 +505,71 @@ def test_session_and_db_are_saved_before_the_markdown(env):
     kept = load_session(env.other_meeting_same_voices.with_suffix(".session.json"))
     assert kept.speakers["spk_0"].status == "auto"
     assert [s.source for s in env.db.people()["田中"]] == ["label", "auto"]
+
+
+MTIME = 1_790_000_000
+
+
+def mtime_iso(timestamp: float = MTIME) -> str:
+    return datetime.fromtimestamp(timestamp).astimezone().isoformat(timespec="seconds")
+
+
+def test_voice_memo_stem_gives_recorded_at(tmp_path):
+    p = tmp_path / "20261016 125520-357FE498.m4a"
+    p.write_bytes(b"x")
+    assert recorded_at_for(p).startswith("2026-10-16T12:55:20")
+    assert recorded_at_for(p) == datetime(2026, 10, 16, 12, 55, 20).astimezone().isoformat(timespec="seconds")
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "meeting.m4a",
+        "20261399 999999-x.m4a",
+        "20260230 100000-x.m4a",  # no 30 February
+        "20261016 240000-x.m4a",  # no hour 24
+        "20261016_125520-x.m4a",  # not the Voice Memos separator
+        "メモ 20261016 125520.m4a",  # the date is not at the start
+        "会議 10.26.m4a",
+    ],
+)
+def test_other_stems_use_mtime(tmp_path, name):
+    p = tmp_path / name
+    p.write_bytes(b"x")
+    os.utime(p, (MTIME, MTIME))
+    assert recorded_at_for(p) == mtime_iso()
+
+
+def test_pipeline_stores_recorded_at(env):
+    os.utime(env.audio, (MTIME, MTIME))
+    session, _, ss = env.run()
+    assert session.recorded_at == mtime_iso()
+    assert load_session(ss).recorded_at == mtime_iso()
+
+
+def test_pipeline_stores_recorded_at_in_the_early_save_too(env):
+    os.utime(env.audio, (MTIME, MTIME))
+    env.response = {"turns": "not a list"}  # fails after the paid response is kept
+    with pytest.raises(AppError, match="応答形式"):
+        env.run()
+    kept = load_session(env.audio.with_suffix(".session.json"))
+    assert kept.speakers == {} and kept.recorded_at == mtime_iso()
+
+
+def test_pipeline_reads_recorded_at_from_a_voice_memo_name(env, tmp_path):
+    memo = tmp_path / "20261016 125520-357FE498.wav"
+    shutil.copy(env.audio, memo)
+    os.utime(memo, (MTIME, MTIME))  # the name wins over the modification time
+    session, _, ss = env.run(audio=memo)
+    expected = datetime(2026, 10, 16, 12, 55, 20).astimezone().isoformat(timespec="seconds")
+    assert session.recorded_at == expected and load_session(ss).recorded_at == expected
+
+
+def test_cached_rerun_decides_recorded_at_again(env):
+    os.utime(env.audio, (MTIME, MTIME))
+    env.run()
+    later = MTIME + 86_400
+    os.utime(env.audio, (later, later))  # same content, so the cache is reused
+    session, _, ss = env.run()
+    assert env.calls == 1
+    assert session.recorded_at == mtime_iso(later) == load_session(ss).recorded_at

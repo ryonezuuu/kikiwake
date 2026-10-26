@@ -1,10 +1,12 @@
 """The ``transcribe`` flow: Avalon response (fresh or cached) -> voiceprints -> matching -> session and Markdown."""
 
+import re
 import sys
 import tempfile
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -66,6 +68,26 @@ def check_audio(audio: Path) -> None:
     require_ffmpeg()
     if not audio.is_file():
         raise UsageError(f"音声ファイルが見つかりません: {audio}")
+
+
+_VOICE_MEMO_STEM = re.compile(r"^(\d{8}) (\d{6})")  # e.g. "20261016 125520-357FE498"
+
+
+def recorded_at_for(audio: Path) -> str:
+    """When ``audio`` was recorded: ISO 8601 in local time, to the second.
+
+    A Voice Memos name (``YYYYMMDD HHMMSS-...``) holds the time; otherwise (or if the name is not a
+    real date and time) the file's modification time is used.
+    """
+    found = _VOICE_MEMO_STEM.match(audio.stem)
+    if found is not None:
+        try:
+            when = datetime.strptime(" ".join(found.groups()), "%Y%m%d %H%M%S")
+        except ValueError:
+            pass  # not a real date and time
+        else:
+            return when.astimezone().isoformat(timespec="seconds")
+    return datetime.fromtimestamp(audio.stat().st_mtime).astimezone().isoformat(timespec="seconds")
 
 
 def _load_previous(path: Path, sha: str) -> Session | None:
@@ -157,6 +179,7 @@ def run_transcribe(
     """
     check_audio(audio)
     sha = sha256_file(audio)
+    recorded_at = recorded_at_for(audio)  # decided afresh on every run, while the audio is there
     markdown_path, session_path, _ = session_paths(audio, opts.output_dir)
     prev = _load_previous(session_path, sha)
     cached = None if opts.force_api else prev  # the session whose Avalon response may be reused
@@ -187,6 +210,7 @@ def run_transcribe(
                     avalon_response=raw,
                     speakers={},
                     warnings=[],
+                    recorded_at=recorded_at,
                 ),
                 session_path,
             )
@@ -259,6 +283,7 @@ def run_transcribe(
             avalon_response=raw,
             speakers=speakers,
             warnings=warnings,
+            recorded_at=recorded_at,
         )
 
         if prev is None or not prev.speakers:

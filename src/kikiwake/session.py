@@ -48,6 +48,7 @@ class Session:
     avalon_response: dict
     speakers: dict[str, SpeakerState]
     warnings: list[dict]
+    recorded_at: str | None = None  # when the meeting was recorded (ISO 8601, local time)
     version: int = SESSION_VERSION
 
     @property
@@ -78,6 +79,7 @@ def save_session(session: Session, path: Path) -> None:
         "audio_path": session.audio_path,
         "audio_sha256": session.audio_sha256,
         "created_at": session.created_at,
+        "recorded_at": session.recorded_at,
         "model_id": session.model_id,
         "avalon_response": session.avalon_response,
         "speakers": {sid: _speaker_to_json(st) for sid, st in session.speakers.items()},
@@ -124,6 +126,9 @@ def load_session(path: Path) -> Session:
         avalon_response = data["avalon_response"]
         if not isinstance(avalon_response, dict):
             raise TypeError("'avalon_response' must be an object")
+        recorded_at = data.get("recorded_at")  # absent in sessions saved before the key existed
+        if recorded_at is not None and not isinstance(recorded_at, str):
+            raise TypeError("'recorded_at' must be a string or null")
         return Session(
             audio_path=str(data["audio_path"]),
             audio_sha256=str(data["audio_sha256"]),
@@ -134,6 +139,7 @@ def load_session(path: Path) -> Session:
                 sid: _speaker_from_json(sid, raw) for sid, raw in data["speakers"].items()
             },
             warnings=list(data["warnings"]),
+            recorded_at=recorded_at,
             version=version,
         )
     except UsageError:
