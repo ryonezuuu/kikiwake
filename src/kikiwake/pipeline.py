@@ -37,6 +37,10 @@ from kikiwake.speaker_db import Sample, SpeakerDB, atomic_write_text
 from kikiwake.voiceprint import build_voiceprint
 
 _TOO_LONG = "録音が 4 時間を超えています（上限 4 時間）"
+_ANOTHER_RECORDING = (
+    "{out} には別の録音（同じ名前）の記録があります。"
+    '--output-dir で別のフォルダを指定してください（例: "{out} (2)"）'
+)
 _OPTIONS_IGNORED = (
     "保存済みの文字起こしを再利用するため --language/--prompt/--max-speakers は反映されません"
     "（反映するには --force-api）"
@@ -90,16 +94,15 @@ def recorded_at_for(audio: Path) -> str:
     return datetime.fromtimestamp(audio.stat().st_mtime).astimezone().isoformat(timespec="seconds")
 
 
-def _load_previous(path: Path, sha: str) -> Session | None:
-    """The session saved at ``path`` if it is readable and made from the same audio."""
+def _load_previous(path: Path) -> Session | None:
+    """The session saved at ``path``, if there is one and it is readable."""
     if not path.exists():
         return None
     try:
-        prev = load_session(path)
+        return load_session(path)
     except UsageError as e:
         _progress(f"警告: 既存のセッションを読み込めないため無視します: {e}")
         return None
-    return prev if prev.audio_sha256 == sha else None
 
 
 def _relabel(session: Session, db: SpeakerDB, speaker_id: str, name: str) -> None:
@@ -174,6 +177,8 @@ def run_transcribe(
 ) -> tuple[Session, Path, Path]:
     """Transcribe ``audio`` and name its speakers; return ``(session, markdown_path, session_path)``.
 
+    A readable session of another recording (another SHA-256) where this one's would go is never
+    overwritten: that is a ``UsageError``, raised before any API call.
     The DB is opened (locked and loaded) only once the transcript and the voiceprints are ready,
     so a ``label`` run while the API is working is not overwritten; it is saved before the lock ends.
     """
@@ -181,7 +186,10 @@ def run_transcribe(
     sha = sha256_file(audio)
     recorded_at = recorded_at_for(audio)  # decided afresh on every run, while the audio is there
     markdown_path, session_path, _ = session_paths(audio, opts.output_dir)
-    prev = _load_previous(session_path, sha)
+    prev = _load_previous(session_path)
+    if prev is not None and prev.audio_sha256 != sha:
+        # Another meeting's record (same file name): never overwrite it, even with --force-api.
+        raise UsageError(_ANOTHER_RECORDING.format(out=session_path.parent))
     cached = None if opts.force_api else prev  # the session whose Avalon response may be reused
 
     if probe_duration(audio) > settings.max_duration:
@@ -227,8 +235,8 @@ def run_transcribe(
     with open_db() as db:
         if cached is not None:
             # A `label` may have changed the session since it was read; under the lock it cannot.
-            latest = _load_previous(session_path, sha)
-            if latest is not None and latest.avalon_response == raw:
+            latest = _load_previous(session_path)
+            if latest is not None and latest.audio_sha256 == sha and latest.avalon_response == raw:
                 prev = cached = latest
         known = set(db.people())
         # Take back this recording's earlier samples first, so it cannot match its own voices

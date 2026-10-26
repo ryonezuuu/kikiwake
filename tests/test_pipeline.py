@@ -299,12 +299,49 @@ def test_cached_rerun_keeps_a_label_whose_sample_was_evicted(env):
     assert (s2.speakers["spk_0"].status, s2.speakers["spk_0"].name) == ("confirmed", "田中")
 
 
-def test_changed_audio_at_same_path_is_not_served_from_cache(env):
-    env.run()
-    shutil.copy(env.other_meeting_same_voices, env.audio)
-    s2, _, ss = env.run()
-    assert env.calls == 2
-    assert load_session(ss).audio_sha256 == s2.audio_sha256
+def another_recording(out_dir) -> str:
+    return (
+        f"{out_dir} には別の録音（同じ名前）の記録があります。"
+        f'--output-dir で別のフォルダを指定してください（例: "{out_dir} (2)"）'
+    )
+
+
+@pytest.mark.parametrize("force_api", [False, True])
+def test_changed_audio_at_same_path_does_not_overwrite_its_record(env, force_api):
+    _, md, ss = env.run()
+    before = (ss.read_bytes(), md.read_bytes())
+    shutil.copy(env.other_meeting_same_voices, env.audio)  # another recording under the same name
+    with pytest.raises(UsageError) as e:
+        env.run(force_api=force_api)
+    assert str(e.value) == another_recording(env.audio.parent)
+    assert env.calls == 1  # refused before any API call
+    assert (ss.read_bytes(), md.read_bytes()) == before
+
+
+def test_same_stem_in_the_same_output_dir_is_refused_and_another_dir_works(env, tmp_path):
+    records = tmp_path / "records"
+    first = tmp_path / "a" / "meeting.wav"
+    second = tmp_path / "b" / "meeting.wav"  # another meeting, the same file name
+    for path, source in ((first, env.audio), (second, env.other_meeting_same_voices)):
+        path.parent.mkdir()
+        shutil.copy(source, path)
+    _, _, ss = env.run(audio=first, output_dir=records / "meeting")
+    with pytest.raises(UsageError) as e:
+        env.run(audio=second, output_dir=records / "meeting")
+    assert str(e.value) == another_recording(records / "meeting")
+    assert env.calls == 1 and load_session(ss).audio_sha256 == sha256_file(first)
+
+    s2, _, ss2 = env.run(audio=second, output_dir=records / "meeting (2)")
+    assert ss2 == records / "meeting (2)" / "meeting.session.json"
+    assert env.calls == 2 and s2.audio_sha256 == sha256_file(second)
+
+
+def test_same_recording_again_in_the_same_output_dir_reuses_the_record(env, tmp_path):
+    out = tmp_path / "records" / "meeting"
+    env.run(output_dir=out)
+    copy_elsewhere = moved_copy(env, tmp_path)  # same content, another place
+    env.run(audio=copy_elsewhere, output_dir=out)
+    assert env.calls == 1
 
 
 def test_corrupt_previous_session_is_ignored_with_a_warning(env, capsys):

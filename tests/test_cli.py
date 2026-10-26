@@ -400,6 +400,21 @@ def test_transcribe_passes_options_and_cached_rerun_skips_api(cli_env, tmp_path,
     assert len(cli_env.calls) == 2 and cli_env.calls[1].force_api is True
 
 
+def test_another_recording_with_the_same_name_exit_2(cli_env, tmp_path, capsys):
+    out_dir = tmp_path / "records" / "meeting"
+    transcribe(cli_env, capsys, "--output-dir", str(out_dir))
+    other = tmp_path / "other" / "meeting.wav"
+    other.parent.mkdir()
+    write_meeting(other, amplitude=0.2)
+    assert main(["transcribe", str(other), "--output-dir", str(out_dir), "--json"]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == "" and len(cli_env.calls) == 1
+    assert captured.err.endswith(
+        f"エラー: {out_dir} には別の録音（同じ名前）の記録があります。"
+        f'--output-dir で別のフォルダを指定してください（例: "{out_dir} (2)"）\n'
+    )
+
+
 def test_relative_paths_are_stored_absolute(cli_env, tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     assert main(["transcribe", "meeting.wav", "--output-dir", "out", "--json"]) == 0
