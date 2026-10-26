@@ -89,10 +89,17 @@ def _write_viz(session: Session, db: SpeakerDB, png_path: Path) -> None:
     render_viz(session, wave, db.embeddings(), png_path)
 
 
-def _summary(session: Session, markdown_path: Path, session_path: Path, png_path: Path) -> dict:
-    return build_summary(
-        session, markdown_path, session_path, png_path if png_path.exists() else None
-    )
+def _refresh_viz(session: Session, db: SpeakerDB, png_path: Path) -> Path | None:
+    """Draw the voice picture after the main work is saved; failing there is only a warning.
+
+    Returns the picture's path, or ``None`` if it could not be drawn.
+    """
+    try:
+        _write_viz(session, db, png_path)
+    except (AppError, OSError) as e:
+        print(f"警告: 可視化をスキップしました: {e}", file=sys.stderr)
+        return None
+    return png_path
 
 
 def _cmd_transcribe(args: argparse.Namespace, home: Path, settings: Settings) -> int:
@@ -114,10 +121,11 @@ def _cmd_transcribe(args: argparse.Namespace, home: Path, settings: Settings) ->
         now=_now,
     )
     _, _, png_path = session_paths(args.audio, args.output_dir)
-    if args.viz:
-        _write_viz(session, _load_db(home, settings), png_path)
+    viz_path = None
+    if args.viz or png_path.exists():  # an existing picture is redrawn so it never shows an old state
+        viz_path = _refresh_viz(session, _load_db(home, settings), png_path)
     if args.json:
-        _print_json(_summary(session, markdown_path, session_path, png_path))
+        _print_json(build_summary(session, markdown_path, session_path, viz_path))
     else:
         print(markdown_path)
     return 0
@@ -140,10 +148,9 @@ def _cmd_label(args: argparse.Namespace, home: Path, settings: Settings) -> int:
         save_session(session, args.session)
         markdown_path, _, png_path = session_paths(Path(session.audio_path), args.session.parent)
         atomic_write_text(markdown_path, render_markdown(session))
-    if png_path.exists():
-        _write_viz(session, db, png_path)
+    viz_path = _refresh_viz(session, db, png_path) if png_path.exists() else None
     if args.json:
-        _print_json(_summary(session, markdown_path, args.session, png_path))
+        _print_json(build_summary(session, markdown_path, args.session, viz_path))
     else:
         print(markdown_path)
     return 0
@@ -190,9 +197,9 @@ def _cmd_viz(args: argparse.Namespace, home: Path, settings: Settings) -> int:
     session = load_session(args.session)
     db = _load_db(home, settings)
     markdown_path, _, png_path = session_paths(Path(session.audio_path), args.session.parent)
-    _write_viz(session, db, png_path)
+    _write_viz(session, db, png_path)  # here drawing is the whole job, so a failure is an error
     if args.json:
-        _print_json(_summary(session, markdown_path, args.session, png_path))
+        _print_json(build_summary(session, markdown_path, args.session, png_path))
     else:
         print(png_path)
     return 0

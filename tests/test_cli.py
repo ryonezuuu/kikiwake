@@ -15,7 +15,7 @@ from speaker_transcribe.audio import SAMPLE_RATE
 from speaker_transcribe.avalon import API_KEY_ENVS
 from speaker_transcribe.cli import main
 from speaker_transcribe.config import Settings
-from speaker_transcribe.errors import UsageError
+from speaker_transcribe.errors import AppError, UsageError
 from speaker_transcribe.session import load_session
 from speaker_transcribe.speaker_db import SpeakerDB
 
@@ -436,6 +436,52 @@ def test_label_regenerates_png_only_when_it_exists(cli_env, monkeypatch, capsys)
     cli_env.png_path.write_bytes(b"stale")
     assert main(["label", str(cli_env.session_path), "spk_1=鈴木", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["viz_path"] == str(cli_env.png_path)
+    assert cli_env.png_path.read_bytes().startswith(b"\x89PNG")
+
+
+VIZ_SKIPPED = "警告: 可視化をスキップしました: "
+
+
+def test_transcribe_viz_failure_is_only_a_warning(cli_env, monkeypatch, capsys):
+    def broken(*args):
+        raise AppError("描画できません")
+
+    monkeypatch.setattr(cli, "render_viz", broken)
+    assert main(["transcribe", str(cli_env.audio), "--viz", "--json"]) == 0
+    captured = capsys.readouterr()
+    summary = json.loads(captured.out)
+    assert summary["viz_path"] is None and summary["speakers"]
+    assert f"{VIZ_SKIPPED}描画できません\n" in captured.err
+    assert load_session(cli_env.session_path).speakers and cli_env.markdown_path.exists()
+
+
+def test_label_viz_failure_is_only_a_warning(cli_env, capsys):
+    main(["transcribe", str(cli_env.audio)])
+    cli_env.png_path.write_bytes(b"stale")
+    cli_env.audio.unlink()  # the picture cannot be redrawn without it
+    capsys.readouterr()
+    assert main(["label", str(cli_env.session_path), "spk_0=田中", "--json"]) == 0
+    captured = capsys.readouterr()
+    summary = json.loads(captured.out)
+    assert summary["viz_path"] is None and summary["speakers"][0]["label"] == "田中"
+    assert f"{VIZ_SKIPPED}元の音声ファイルが見つかりません: {cli_env.audio}\n" in captured.err
+    assert load_session(cli_env.session_path).speakers["spk_0"].status == "confirmed"
+    assert db_names(capsys) == ["田中"]
+
+
+def test_label_viz_write_error_is_only_a_warning(cli_env, capsys):
+    main(["transcribe", str(cli_env.audio)])
+    cli_env.png_path.mkdir()  # an existing "picture" that cannot be overwritten
+    capsys.readouterr()
+    assert main(["label", str(cli_env.session_path), "spk_0=田中", "--json"]) == 0
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["viz_path"] is None and VIZ_SKIPPED in captured.err
+
+
+def test_transcribe_redraws_an_existing_png(cli_env, capsys):
+    transcribe(cli_env, capsys, "--viz")
+    cli_env.png_path.write_bytes(b"stale")
+    assert transcribe(cli_env, capsys)["viz_path"] == str(cli_env.png_path)
     assert cli_env.png_path.read_bytes().startswith(b"\x89PNG")
 
 
