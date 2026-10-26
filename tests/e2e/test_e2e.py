@@ -15,30 +15,31 @@ from speaker_transcribe.cli import main
 
 pytestmark = pytest.mark.e2e
 
-# The Japanese Grandpa and Sandy voices must be addressed by their full names:
-# plain "Grandpa" / "Sandy" select the English voices.
+# The Japanese Rocko and Sandy voices must be addressed by their full names:
+# plain "Rocko" / "Sandy" select the English voices.
+# (Avalon merged the Japanese Grandpa and Sandy voices into one speaker, so Rocko is used instead.)
 KYOKO = "Kyoko"
-GRANDPA = "Grandpa (日本語（日本）)"
+ROCKO = "Rocko (日本語（日本）)"
 SANDY = "Sandy (日本語（日本）)"
 
 GAP_SECONDS = 0.7
 
-# Meeting A: Kyoko -> Grandpa -> Sandy -> Kyoko -> Grandpa -> Sandy (each voice twice).
+# Meeting A: Kyoko -> Rocko -> Sandy -> Kyoko -> Rocko -> Sandy (each voice twice).
 MEETING_A = [
     (KYOKO, "皆さん、お疲れ様です。それでは来週の定例会議を始めます。まず先月の売上の報告からお願いします。"),
-    (GRANDPA, "はい、承知しました。先月の売上は前の年より約一割増えました。関西地方が特に好調でした。"),
+    (ROCKO, "はい、承知しました。先月の売上は前の年より約一割増えました。関西地方が特に好調でした。"),
     (SANDY, "ありがとうございます。次に広告の予算について相談させてください。来月からテレビで宣伝を始めます。"),
     (KYOKO, "分かりました。予算の上限は三百万円までですので、媒体ごとの金額を表にまとめてください。"),
-    (GRANDPA, "了解です。工場の生産計画も見直しておきます。部品の注文は、今週中に出す予定です。"),
+    (ROCKO, "了解です。工場の生産計画も見直しておきます。部品の注文は、今週中に出す予定です。"),
     (SANDY, "最後に、お客様の問い合わせ窓口についてです。電話の受付時間を、午後六時まで広げたいと考えています。"),
 ]
 
-# Meeting B: Grandpa -> Sandy -> Kyoko -> Grandpa -> Sandy -> Kyoko, with different sentences.
+# Meeting B: Rocko -> Sandy -> Kyoko -> Rocko -> Sandy -> Kyoko, with different sentences.
 MEETING_B = [
-    (GRANDPA, "お待たせしました。今日は新しいオフィスへの引っ越しについて話し合います。駅から歩いて五分の便利な建物です。"),
+    (ROCKO, "お待たせしました。今日は新しいオフィスへの引っ越しについて話し合います。駅から歩いて五分の便利な建物です。"),
     (SANDY, "私も下見に行ってきました。窓が大きくて明るい部屋でしたが、会議室が少し狭いです。"),
     (KYOKO, "引っ越しの日は来月の最終週を考えています。荷物の整理は各自で進めて、不要な書類は処分してください。"),
-    (GRANDPA, "パソコンの配線は、業者に頼むことにしました。見積もりが届きましたので、後ほどメールで共有します。"),
+    (ROCKO, "パソコンの配線は、業者に頼むことにしました。見積もりが届きましたので、後ほどメールで共有します。"),
     (SANDY, "新しい住所の連絡も忘れずに行いましょう。名刺と封筒の印刷は、案内状と一緒に注文します。"),
     (KYOKO, "では以上で会議を終わります。次回は引っ越しが終わってから、新しい会議室で集まりましょう。"),
 ]
@@ -103,7 +104,7 @@ def test_names_carry_over_between_meetings(tmp_path, monkeypatch, capsys):
         print("\nmeeting A:", json.dumps(sa["speakers"], ensure_ascii=False, indent=2))
     assert len(sa["speakers"]) == 3, sa
 
-    assert main(["label", sa["session_path"], "spk_0=京子", "spk_1=祖父", "spk_2=サンディ", "--json"]) == 0
+    assert main(["label", sa["session_path"], "spk_0=京子", "spk_1=ロッコ", "spk_2=サンディ", "--json"]) == 0
     capsys.readouterr()
 
     assert main(["transcribe", str(b), "--language", "ja", "--viz", "--json"]) == 0
@@ -112,7 +113,7 @@ def test_names_carry_over_between_meetings(tmp_path, monkeypatch, capsys):
         print("\nmeeting B:", json.dumps(sb["speakers"], ensure_ascii=False, indent=2))
         print("voices picture:", sb["viz_path"])
     assert [(s["label"], s["status"]) for s in sb["speakers"]] == [
-        ("祖父", "auto"),
+        ("ロッコ", "auto"),
         ("サンディ", "auto"),
         ("京子", "auto"),
     ], sb
