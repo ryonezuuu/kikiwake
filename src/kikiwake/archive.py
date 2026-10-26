@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from kikiwake.errors import AppError, UsageError
 from kikiwake.session import Session, load_session, session_paths
 from kikiwake.speaker_db import atomic_write_text
 
@@ -21,6 +20,8 @@ _NO_SUMMARY = "（要点なし）"
 _NAMED = ("auto", "confirmed")
 _HEADER = "# 会議の記録\n\n| 日時 | 長さ | 参加者 | 要点 | 文字起こし |\n|---|---|---|---|---|\n"
 _EMPTY_ROW = "| （まだ記録がありません） | | | | |\n"
+# Characters of a file name that would end the table cell or the <...> link; percent-encoded.
+_LINK_ESCAPES = str.maketrans({"|": "%7C", "<": "%3C", ">": "%3E"})
 
 
 @dataclass(frozen=True)
@@ -79,19 +80,31 @@ def participants_text(session: Session) -> str:
     return _table_safe(text)
 
 
+def _meeting_time(session: Session) -> datetime:
+    """``recorded_at``, or ``created_at`` where it is absent (older sessions) or not a time (hand-edited).
+
+    Both are written with a UTC offset. ``ValueError`` if ``created_at`` is not a time either.
+    """
+    if session.recorded_at:
+        try:
+            return datetime.fromisoformat(session.recorded_at)
+        except ValueError:
+            pass
+    return datetime.fromisoformat(session.created_at)
+
+
 def _meeting(session_file: Path, root: Path) -> tuple[datetime, MeetingRow]:
-    """One record's sort time and table row; ``UsageError``, ``AppError`` or ``ValueError`` if it is unreadable."""
+    """One record's sort time and table row; raises if the record cannot be read."""
     session = load_session(session_file)
     minutes = round(session.transcription.duration / 60)
-    # recorded_at is absent in sessions saved before it was kept; both carry a UTC offset.
-    when = datetime.fromisoformat(session.recorded_at or session.created_at)
+    when = _meeting_time(session)
     markdown_path = session_paths(Path(session.audio_path), session_file.parent)[0]
     row = MeetingRow(
         when=when.strftime("%Y-%m-%d %H:%M"),  # as written, in its own UTC offset
         minutes=minutes,
         participants=participants_text(session),
         summary=summary_line(session_file.parent / SUMMARY_FILENAME),
-        link=markdown_path.relative_to(root).as_posix(),
+        link=markdown_path.relative_to(root).as_posix().translate(_LINK_ESCAPES),
     )
     # A time without an offset (hand-edited) counts as UTC for ordering only, so sorting never fails.
     return (when if when.tzinfo else when.replace(tzinfo=timezone.utc)), row
@@ -107,15 +120,15 @@ def _format_row(row: MeetingRow) -> str:
 def build_index(root: Path) -> tuple[str, int, list[str]]:
     """The text of ``root/index.md``, the number of meetings in it, and the records skipped.
 
-    Meetings are newest first (ties by link). A record that cannot be read is skipped and listed by
-    its path relative to ``root``.
+    Meetings are newest first (ties by link). A record that cannot be read, for whatever reason, is
+    skipped and listed by its path relative to ``root``: one bad record never stops the index.
     """
     found: list[tuple[datetime, MeetingRow]] = []
     skipped: list[str] = []
     for session_file in (root / "records").glob("*/*.session.json"):
         try:
             found.append(_meeting(session_file, root))
-        except (UsageError, AppError, ValueError):  # ValueError: a time that does not parse
+        except Exception:
             skipped.append(session_file.relative_to(root).as_posix())
 
     found.sort(key=lambda pair: pair[1].link)

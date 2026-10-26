@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 from conftest import session_from_words
 
+from kikiwake import archive
 from kikiwake.archive import build_index, participants_text, summary_line, write_index
 from kikiwake.session import Session, save_session
 
@@ -193,7 +194,8 @@ def test_unreadable_session_is_skipped_with_warning(tmp_path, capsys):
     no_response = meeting("no response", "2026-10-26T09:00:00+09:00")
     no_response.avalon_response = {}  # loads, but is not a transcription
     put(tmp_path, "no response", no_response)
-    put(tmp_path, "bad time", meeting("bad time", "last Tuesday"))
+    put(tmp_path, "bad times", meeting("bad times", "last Tuesday", created_at="yesterday"))
+    put(tmp_path, "endless", meeting("endless", "2026-10-26T09:00:00+09:00", duration=float("inf")))
     (tmp_path / "records" / "not a file" / "x.session.json").mkdir(parents=True)  # a directory
     (tmp_path / "records" / "stray.session.json").write_text("{}", encoding="utf-8")  # not in a folder: ignored
 
@@ -202,8 +204,9 @@ def test_unreadable_session_is_skipped_with_warning(tmp_path, capsys):
     assert path == tmp_path / "index.md"
     assert count == 1
     assert skipped == [
-        "records/bad time/bad time.session.json",
+        "records/bad times/bad times.session.json",
         "records/broken json/broken json.session.json",
+        "records/endless/endless.session.json",  # OverflowError: any error skips only that record
         "records/no response/no response.session.json",
         "records/not a file/x.session.json",
     ]
@@ -211,6 +214,45 @@ def test_unreadable_session_is_skipped_with_warning(tmp_path, capsys):
     assert len(rows(text)) == 1 and "records/good/good.md" in text
     err = capsys.readouterr().err
     assert err.splitlines() == [f"警告: 読めない記録を飛ばしました: {rel}" for rel in skipped]
+
+
+def test_unexpected_error_in_one_record_does_not_stop_the_index(tmp_path, monkeypatch):
+    put(tmp_path, "good", meeting("good", "2026-10-26T09:00:00+09:00"))
+    put(tmp_path, "odd", meeting("odd", "2026-10-26T09:00:00+09:00"))
+    real = archive.participants_text
+
+    def flaky(session):
+        if session.audio_path.endswith("odd.m4a"):
+            raise RuntimeError("unexpected")
+        return real(session)
+
+    monkeypatch.setattr(archive, "participants_text", flaky)
+    _, count, skipped = build_index(tmp_path)
+    assert (count, skipped) == (1, ["records/odd/odd.session.json"])
+
+
+@pytest.mark.parametrize("recorded_at", ["last Tuesday", ""])
+def test_recorded_at_that_is_not_a_time_falls_back_to_created_at(tmp_path, recorded_at):
+    put(tmp_path, "m", meeting("m", recorded_at, created_at="2026-10-15T12:34:56+09:00"))
+    put(tmp_path, "later", meeting("later", "2026-10-20T09:00:00+09:00"))
+    text, count, skipped = build_index(tmp_path)
+    assert (count, skipped) == (2, [])
+    assert whens(text) == ["2026-10-20 09:00", "2026-10-15 12:34"]
+
+
+@pytest.mark.parametrize(
+    ("stem", "target"),
+    [
+        ("速度|精度", "records/速度%7C精度/速度%7C精度.md"),
+        ("a<b>c", "records/a%3Cb%3Ec/a%3Cb%3Ec.md"),
+    ],
+)
+def test_stem_with_table_or_link_characters_does_not_break_the_row(tmp_path, stem, target):
+    put(tmp_path, stem, meeting(stem, "2026-10-26T09:00:00+09:00"))
+    text, _, _ = build_index(tmp_path)
+    (row,) = rows(text)
+    assert row.endswith(f" | [開く](<{target}>) |")
+    assert row.count("|") == 6  # five cells
 
 
 @pytest.mark.parametrize("make_records_dir", [False, True])
